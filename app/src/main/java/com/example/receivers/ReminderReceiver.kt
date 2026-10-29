@@ -41,6 +41,111 @@ class ReminderReceiver : BroadcastReceiver() {
                 return
             }
 
+            if (intent.action == ACTION_EXECUTE_AUTOMATION_NOW) {
+                val notifId = intent.getIntExtra("NOTIFICATION_ID", 0)
+                if (notifId != 0) {
+                    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                    nm?.cancel(notifId)
+                }
+                val noteId = intent.getStringExtra("NOTE_ID") ?: ""
+                val actType = intent.getStringExtra("ACTION_TYPE") ?: ""
+                val targetPkg = intent.getStringExtra("TARGET_PACKAGE_NAME") ?: ""
+                val targetName = intent.getStringExtra("TARGET_APP_NAME") ?: ""
+
+                if (noteId.isNotBlank()) {
+                    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+                    val cancelPendingIntent = PendingIntent.getBroadcast(
+                        context,
+                        noteId.hashCode(),
+                        Intent(context, ReminderReceiver::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    alarmManager?.cancel(cancelPendingIntent)
+
+                    val prefs = context.getSharedPreferences("notes_app_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putBoolean("cancelled_auto_$noteId", true).apply()
+                }
+
+                if (actType == "LOCK_SCREEN") {
+                    try {
+                        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                            addCategory(Intent.CATEGORY_HOME)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(homeIntent)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    if (!isEmulator()) {
+                        try {
+                            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+                            val comp = android.content.ComponentName(context, AppDeviceAdminReceiver::class.java)
+                            if (dpm != null && dpm.isAdminActive(comp)) {
+                                dpm.lockNow()
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    } else {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            Toast.makeText(
+                                context,
+                                "🌙 Chế độ Đi ngủ: Đã đóng các app về Home Screen. (Trên điện thoại thật sẽ tự khóa tắt màn hình)",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                } else if (actType == "OPEN_APP" && targetPkg.isNotBlank()) {
+                    try {
+                        val launchIntent = context.packageManager.getLaunchIntentForPackage(targetPkg)?.apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                        }
+                        if (launchIntent != null) {
+                            context.startActivity(launchIntent)
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                Toast.makeText(context, "🚀 Đang mở ${targetName.ifBlank { "ứng dụng" }} ngay...", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                return
+            }
+
+            if (intent.action == ACTION_CANCEL_AUTOMATION) {
+                val notifId = intent.getIntExtra("NOTIFICATION_ID", 0)
+                if (notifId != 0) {
+                    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                    nm?.cancel(notifId)
+                }
+                val noteId = intent.getStringExtra("NOTE_ID") ?: ""
+                val timeScheduled = intent.getStringExtra("TIME_SCHEDULED") ?: ""
+                val actType = intent.getStringExtra("ACTION_TYPE") ?: ""
+
+                if (noteId.isNotBlank()) {
+                    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+                    val cancelPendingIntent = PendingIntent.getBroadcast(
+                        context,
+                        noteId.hashCode(),
+                        Intent(context, ReminderReceiver::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    alarmManager?.cancel(cancelPendingIntent)
+
+                    val prefs = context.getSharedPreferences("notes_app_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putBoolean("cancelled_auto_$noteId", true).apply()
+                }
+
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    val actionDesc = if (actType == "LOCK_SCREEN") "khóa máy đi ngủ" else "mở ứng dụng"
+                    val msg = if (timeScheduled.isNotBlank()) "❌ Đã hủy $actionDesc lúc $timeScheduled" else "❌ Đã hủy thực hiện tự động lần này"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+                return
+            }
+
             if (intent.action == ACTION_LOCK_DEVICE) {
                 stopAlarm()
                 val notifId = intent.getIntExtra("NOTIFICATION_ID", 0)
@@ -136,8 +241,9 @@ class ReminderReceiver : BroadcastReceiver() {
             var activeDbTask: com.example.data.ShiftTask? = null
             var activeDbStation: com.example.data.ShiftStation? = null
 
+            val prefs = context.getSharedPreferences("notes_app_prefs", Context.MODE_PRIVATE)
+
             if (isShiftTask) {
-                val prefs = context.getSharedPreferences("notes_app_prefs", Context.MODE_PRIVATE)
                 val startedStationIds = prefs.getStringSet("started_station_ids", null) ?: emptySet()
                 val stationId = intent.getStringExtra("STATION_ID")
                 val isShiftStarted = prefs.getBoolean("is_shift_started", false)
@@ -182,6 +288,186 @@ class ReminderReceiver : BroadcastReceiver() {
             val effTargetAppName = if (isShiftTask && activeDbTask != null) activeDbTask!!.targetAppName.ifBlank { targetAppName } else targetAppName
             val effHasLoudAlarm = if (isShiftTask && activeDbTask != null) activeDbTask!!.hasLoudAlarm else hasLoudAlarm
 
+            val isAutomationPreWarning = intent.getBooleanExtra(IS_AUTOMATION_PRE_WARNING, false)
+            val noteId = intent.getStringExtra("NOTE_ID") ?: System.currentTimeMillis().toString()
+
+            // KHÓA CHỐNG BẮN ĐÚP (Anti-duplicate de-bounce guard):
+            // Ngăn chặn triệt để trường hợp Android AlarmManager kích hoạt 2 broadcast cách nhau vài giây
+            val guardKey = "last_notify_ts_${noteId}_$isAutomationPreWarning"
+            val lastNotifyTs = prefs.getLong(guardKey, 0L)
+            val currentTs = System.currentTimeMillis()
+            if (currentTs - lastNotifyTs < 25_000L) {
+                // Đã vừa phát thông báo cho tác vụ này cách đây dưới 25 giây -> Bỏ qua ngay lập tức!
+                return
+            }
+            prefs.edit().putLong(guardKey, currentTs).apply()
+
+            val rawNoteText = intent.getStringExtra("NOTE_TEXT") ?: "Có công việc cần thực hiện!"
+            val categoryName = intent.getStringExtra("CATEGORY_NAME") ?: "Nhắc nhở công việc & Ca làm"
+
+            val effTaskTitle = activeDbTask?.title
+                ?: intent.getStringExtra("TASK_TITLE")
+                ?: rawNoteText.substringBefore(":").removePrefix("📋 ").trim().ifBlank { "Công việc theo ca" }
+
+            val effTaskInstruction = activeDbTask?.instruction
+                ?: intent.getStringExtra("TASK_INSTRUCTION")
+                ?: if (rawNoteText.contains(":")) rawNoteText.substringAfter(":").trim() else ""
+
+            val effTimeScheduled = activeDbTask?.timeScheduled
+                ?: intent.getStringExtra("TIME_SCHEDULED")
+                ?: ""
+
+            val stationName = activeDbStation?.name ?: intent.getStringExtra("STATION_NAME") ?: ""
+
+            // 1. NẾU LÀ CẢNH BÁO TRƯỚC 1 PHÚT CHO TÍNH NĂNG MỞ APP HOẶC KHÓA MÀN HÌNH ĐI NGỦ
+            if (isAutomationPreWarning && (effActionType == "OPEN_APP" || effActionType == "LOCK_SCREEN")) {
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                val channelId = "notes_automation_prewarning"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
+                    val channel = NotificationChannel(
+                        channelId,
+                        "Cảnh báo tự động hóa (Trước 1 phút)",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Thông báo cảnh báo trước 1 phút khi sắp tự động mở app hoặc tắt máy đi ngủ, cho phép thực hiện ngay hoặc hủy bỏ"
+                        enableLights(true)
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 400, 200, 400)
+                        lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                    }
+                    notificationManager.createNotificationChannel(channel)
+                }
+
+                val preTitle = if (effActionType == "OPEN_APP") {
+                    "⏳ [SẮP ĐẾN GIỜ] Mở ${effTargetAppName.ifBlank { "ứng dụng" }} (sau 1 phút)"
+                } else {
+                    "🌙 [SẮP ĐẾN GIỜ] Khóa màn hình & Đi ngủ (sau 1 phút)"
+                }
+
+                val preSummary = if (stationName.isNotBlank()) "📍 $stationName" else "Sắp thực hiện"
+
+                val preBody = if (effActionType == "OPEN_APP") {
+                    buildString {
+                        append("Ứng dụng ${effTargetAppName.ifBlank { "đã chọn" }} sẽ tự động mở lúc $effTimeScheduled để làm: $effTaskTitle.")
+                        if (effTaskInstruction.isNotBlank()) {
+                            append("\n\n📖 Chi tiết: $effTaskInstruction")
+                        }
+                        append("\n\n👉 Bạn có thể nhấn [⚡ Mở ngay] nếu muốn bắt đầu sớm hoặc [❌ Hủy lần này] nếu muốn bỏ qua.")
+                    }
+                } else {
+                    buildString {
+                        append("Hệ thống sẽ tự động đóng ứng dụng và khóa màn hình lúc $effTimeScheduled ($effTaskTitle).")
+                        if (effTaskInstruction.isNotBlank()) {
+                            append("\n\n📖 Chi tiết: $effTaskInstruction")
+                        }
+                        append("\n\n👉 Bạn có thể nhấn [🔒 Khóa ngay] để nghỉ ngơi sớm hoặc [❌ Hủy lần này] nếu chưa muốn tắt máy.")
+                    }
+                }
+
+                // Nút 1: Thực hiện ngay
+                val execIntent = Intent(context, ReminderReceiver::class.java).apply {
+                    action = ACTION_EXECUTE_AUTOMATION_NOW
+                    putExtra("NOTE_ID", noteId)
+                    putExtra("ACTION_TYPE", effActionType)
+                    putExtra("TARGET_PACKAGE_NAME", effTargetPackage)
+                    putExtra("TARGET_APP_NAME", effTargetAppName)
+                    putExtra("NOTIFICATION_ID", noteId.hashCode())
+                }
+                val execPendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    (noteId + "_exec_now").hashCode(),
+                    execIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val execLabel = if (effActionType == "OPEN_APP") "⚡ Mở ngay" else "🔒 Khóa ngay"
+
+                // Nút 2: Hủy bỏ lần này
+                val cancelIntent = Intent(context, ReminderReceiver::class.java).apply {
+                    action = ACTION_CANCEL_AUTOMATION
+                    putExtra("NOTE_ID", noteId)
+                    putExtra("ACTION_TYPE", effActionType)
+                    putExtra("TIME_SCHEDULED", effTimeScheduled)
+                    putExtra("NOTIFICATION_ID", noteId.hashCode())
+                }
+                val cancelPendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    (noteId + "_cancel_auto").hashCode(),
+                    cancelIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val cancelLabel = "❌ Hủy lần này"
+
+                val openAppIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                val contentPendingIntent = PendingIntent.getActivity(
+                    context,
+                    noteId.hashCode(),
+                    openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+                val preNotification = NotificationCompat.Builder(context, channelId)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setColor(ContextCompat.getColor(context, R.color.notification_accent))
+                    .setContentTitle(preTitle)
+                    .setContentText(if (effActionType == "OPEN_APP") "Sắp tự động mở $effTargetAppName sau 1 phút" else "Sắp tự động khóa màn hình sau 1 phút")
+                    .setStyle(
+                        NotificationCompat.BigTextStyle()
+                            .setBigContentTitle(preTitle)
+                            .setSummaryText(preSummary)
+                            .bigText(preBody)
+                    )
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setContentIntent(contentPendingIntent)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(true)
+                    .setTimeoutAfter(70_000L)
+                    .addAction(
+                        if (effActionType == "OPEN_APP") android.R.drawable.ic_menu_send else android.R.drawable.ic_lock_power_off,
+                        execLabel,
+                        execPendingIntent
+                    )
+                    .addAction(
+                        android.R.drawable.ic_menu_close_clear_cancel,
+                        cancelLabel,
+                        cancelPendingIntent
+                    )
+                    .build()
+
+                notificationManager?.notify(noteId.hashCode(), preNotification)
+                return
+            }
+
+            // 2. KIỂM TRA NẾU NGƯỜI DÙNG ĐÃ BẤM HỦY HOẶC ĐÃ THỰC HIỆN SỚM TRƯỚC ĐÓ
+            val isCancelled = prefs.getBoolean("cancelled_auto_$noteId", false)
+            if (isCancelled) {
+                prefs.edit().remove("cancelled_auto_$noteId").apply()
+                // Tự động lên lịch lại cho chu kỳ ngày mai nếu là ca làm lặp lại
+                if (isShiftTask) {
+                    val taskToReschedule = activeDbTask ?: com.example.data.ShiftTask(
+                        id = noteId,
+                        stationId = activeDbStation?.id ?: intent.getStringExtra("STATION_ID") ?: "",
+                        timeScheduled = effTimeScheduled,
+                        title = effTaskTitle,
+                        instruction = effTaskInstruction,
+                        hasLoudAlarm = effHasLoudAlarm,
+                        actionType = effActionType,
+                        targetPackageName = effTargetPackage,
+                        targetAppName = effTargetAppName
+                    )
+                    com.example.utils.ShiftAlarmHelper.scheduleShiftTaskAlarm(
+                        context = context,
+                        task = taskToReschedule,
+                        stationName = stationName,
+                        forceTomorrow = true
+                    )
+                }
+                return
+            }
+
             // XỬ LÝ HÀNH ĐỘNG TỰ ĐỘNG HÓA
             // 1. Tự động đóng app về Home & Khóa màn hình (ví dụ: tắt app đi ngủ lúc 22:15)
             if (effActionType == "LOCK_SCREEN") {
@@ -214,28 +500,73 @@ class ReminderReceiver : BroadcastReceiver() {
                         ).show()
                     }
                 }
+
+                // Tự động xóa sạch thông báo cảnh báo trước 1 phút để không để lại rác trên thanh thông báo/đồng hồ
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                nm?.cancel(noteId.hashCode())
+
+                // Tự động lên lịch lại cho ca làm việc vào ngày mai
+                if (isShiftTask && effTimeScheduled.isNotBlank()) {
+                    val taskToReschedule = activeDbTask ?: com.example.data.ShiftTask(
+                        id = noteId,
+                        stationId = activeDbStation?.id ?: intent.getStringExtra("STATION_ID") ?: "",
+                        timeScheduled = effTimeScheduled,
+                        title = effTaskTitle,
+                        instruction = effTaskInstruction,
+                        hasLoudAlarm = effHasLoudAlarm,
+                        actionType = effActionType,
+                        targetPackageName = effTargetPackage,
+                        targetAppName = effTargetAppName
+                    )
+                    com.example.utils.ShiftAlarmHelper.scheduleShiftTaskAlarm(
+                        context = context,
+                        task = taskToReschedule,
+                        stationName = stationName,
+                        forceTomorrow = true
+                    )
+                }
+                return
             }
 
             // 2. Tự động mở ứng dụng đã chọn trong máy (ví dụ: mở TikTok lúc 06:00)
-            var launchPendingIntent: PendingIntent? = null
             if (effActionType == "OPEN_APP" && effTargetPackage.isNotBlank()) {
                 try {
                     val launchIntent = context.packageManager.getLaunchIntentForPackage(effTargetPackage)?.apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
                     }
                     if (launchIntent != null) {
-                        launchPendingIntent = PendingIntent.getActivity(
-                            context,
-                            (intent.getStringExtra("NOTE_ID") ?: "").hashCode() + 202,
-                            launchIntent,
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                        )
                         // Khởi chạy trực tiếp từ background nếu được phép (Overlay/Foreground/Unlocked)
                         context.startActivity(launchIntent)
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
+
+                // Tự động xóa sạch thông báo cảnh báo trước 1 phút để không để lại rác trên thanh thông báo/đồng hồ
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                nm?.cancel(noteId.hashCode())
+
+                // Tự động lên lịch lại cho ca làm việc vào ngày mai
+                if (isShiftTask && effTimeScheduled.isNotBlank()) {
+                    val taskToReschedule = activeDbTask ?: com.example.data.ShiftTask(
+                        id = noteId,
+                        stationId = activeDbStation?.id ?: intent.getStringExtra("STATION_ID") ?: "",
+                        timeScheduled = effTimeScheduled,
+                        title = effTaskTitle,
+                        instruction = effTaskInstruction,
+                        hasLoudAlarm = effHasLoudAlarm,
+                        actionType = effActionType,
+                        targetPackageName = effTargetPackage,
+                        targetAppName = effTargetAppName
+                    )
+                    com.example.utils.ShiftAlarmHelper.scheduleShiftTaskAlarm(
+                        context = context,
+                        task = taskToReschedule,
+                        stationName = stationName,
+                        forceTomorrow = true
+                    )
+                }
+                return
             }
 
             // 3. Tự động chuyển Chế độ Âm thanh (Im lặng / Rung / Chuông bình thường)
@@ -353,24 +684,6 @@ class ReminderReceiver : BroadcastReceiver() {
                 }
             }
 
-            val noteId = intent.getStringExtra("NOTE_ID") ?: System.currentTimeMillis().toString()
-            val rawNoteText = intent.getStringExtra("NOTE_TEXT") ?: "Có công việc cần thực hiện!"
-            val categoryName = intent.getStringExtra("CATEGORY_NAME") ?: "Nhắc nhở công việc & Ca làm"
-
-            val effTaskTitle = activeDbTask?.title
-                ?: intent.getStringExtra("TASK_TITLE")
-                ?: rawNoteText.substringBefore(":").removePrefix("📋 ").trim().ifBlank { "Công việc theo ca" }
-
-            val effTaskInstruction = activeDbTask?.instruction
-                ?: intent.getStringExtra("TASK_INSTRUCTION")
-                ?: if (rawNoteText.contains(":")) rawNoteText.substringAfter(":").trim() else ""
-
-            val effTimeScheduled = activeDbTask?.timeScheduled
-                ?: intent.getStringExtra("TIME_SCHEDULED")
-                ?: ""
-
-            val stationName = activeDbStation?.name ?: ""
-
             val noteText = if (isShiftTask) {
                 if (effTaskInstruction.isNotBlank()) {
                     "📝 Chi tiết: $effTaskInstruction"
@@ -444,6 +757,25 @@ class ReminderReceiver : BroadcastReceiver() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            var launchPendingIntent: PendingIntent? = null
+            if (effActionType == "OPEN_APP" && effTargetPackage.isNotBlank()) {
+                try {
+                    val launchIntent = context.packageManager.getLaunchIntentForPackage(effTargetPackage)?.apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                    }
+                    if (launchIntent != null) {
+                        launchPendingIntent = PendingIntent.getActivity(
+                            context,
+                            noteId.hashCode() + 202,
+                            launchIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
             val primaryContentIntent = if (effActionType == "OPEN_APP" && launchPendingIntent != null) {
                 launchPendingIntent
             } else {
@@ -503,10 +835,11 @@ class ReminderReceiver : BroadcastReceiver() {
                 .setContentText(noteText)
                 .setStyle(bigTextStyle)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setCategory(if (effHasLoudAlarm) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_REMINDER)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setContentIntent(primaryContentIntent)
                 .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
 
             if (stationName.isNotBlank()) {
                 notificationBuilder.setSubText(stationName)
@@ -607,79 +940,27 @@ class ReminderReceiver : BroadcastReceiver() {
 
             notificationManager.notify(noteId.hashCode(), notificationBuilder.build())
 
-            // If this is a shift task, automatically reschedule for tomorrow at the same time
+            // Tự động lên lịch lại cho ca làm việc vào ngày mai (bao gồm cả báo trước 1 phút nếu có)
             val effTime = if (effTimeScheduled.isNotBlank()) effTimeScheduled else (intent.getStringExtra("TIME_SCHEDULED") ?: "")
             val effStId = activeDbTask?.stationId ?: intent.getStringExtra("STATION_ID") ?: ""
             if (isShiftTask && effTime.isNotBlank()) {
-                val parts = effTime.split(":")
-                if (parts.size >= 2) {
-                    val hour = parts[0].trim().toIntOrNull()
-                    val minute = parts[1].trim().toIntOrNull()
-                    if (hour != null && minute != null) {
-                        val calendar = java.util.Calendar.getInstance().apply {
-                            add(java.util.Calendar.DAY_OF_YEAR, 1) // Tomorrow
-                            set(java.util.Calendar.HOUR_OF_DAY, hour)
-                            set(java.util.Calendar.MINUTE, minute)
-                            set(java.util.Calendar.SECOND, 0)
-                            set(java.util.Calendar.MILLISECOND, 0)
-                        }
-                        val nextTriggerMs = calendar.timeInMillis
-                        val nextIntent = Intent(context, ReminderReceiver::class.java).apply {
-                            putExtra("NOTE_ID", noteId)
-                            putExtra("TASK_TITLE", effTaskTitle)
-                            putExtra("TASK_INSTRUCTION", effTaskInstruction)
-                            putExtra("NOTE_TEXT", noteText)
-                            putExtra("CATEGORY_NAME", categoryName)
-                            putExtra("IS_SHIFT_TASK", true)
-                            putExtra("STATION_ID", effStId)
-                            putExtra("TIME_SCHEDULED", effTime)
-                            putExtra("HAS_LOUD_ALARM", effHasLoudAlarm)
-                            putExtra("ACTION_TYPE", effActionType)
-                            putExtra("TARGET_PACKAGE_NAME", effTargetPackage)
-                            putExtra("TARGET_APP_NAME", effTargetAppName)
-                        }
-                        val nextPendingIntent = PendingIntent.getBroadcast(
-                            context,
-                            noteId.hashCode(),
-                            nextIntent,
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                        )
-                        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
-                        try {
-                            val showIntent = Intent(context, MainActivity::class.java)
-                            val showPendingIntent = PendingIntent.getActivity(
-                                context,
-                                noteId.hashCode(),
-                                showIntent,
-                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                            )
-                            val alarmClockInfo = AlarmManager.AlarmClockInfo(nextTriggerMs, showPendingIntent)
-                            alarmManager?.setAlarmClock(alarmClockInfo, nextPendingIntent)
-                        } catch (e: Exception) {
-                            try {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                    alarmManager?.setExactAndAllowWhileIdle(
-                                        AlarmManager.RTC_WAKEUP,
-                                        nextTriggerMs,
-                                        nextPendingIntent
-                                    )
-                                } else {
-                                    alarmManager?.setExact(
-                                        AlarmManager.RTC_WAKEUP,
-                                        nextTriggerMs,
-                                        nextPendingIntent
-                                    )
-                                }
-                            } catch (e2: Exception) {
-                                alarmManager?.set(
-                                    AlarmManager.RTC_WAKEUP,
-                                    nextTriggerMs,
-                                    nextPendingIntent
-                                )
-                            }
-                        }
-                    }
-                }
+                val taskToReschedule = activeDbTask ?: com.example.data.ShiftTask(
+                    id = noteId,
+                    stationId = effStId,
+                    timeScheduled = effTime,
+                    title = effTaskTitle,
+                    instruction = effTaskInstruction,
+                    hasLoudAlarm = effHasLoudAlarm,
+                    actionType = effActionType,
+                    targetPackageName = effTargetPackage,
+                    targetAppName = effTargetAppName
+                )
+                com.example.utils.ShiftAlarmHelper.scheduleShiftTaskAlarm(
+                    context = context,
+                    task = taskToReschedule,
+                    stationName = stationName,
+                    forceTomorrow = true
+                )
             }
         } catch (e: Throwable) {
             e.printStackTrace()
@@ -712,6 +993,9 @@ class ReminderReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_DISMISS_ALARM = "com.example.ACTION_DISMISS_ALARM"
         const val ACTION_LOCK_DEVICE = "com.example.ACTION_LOCK_DEVICE"
+        const val ACTION_EXECUTE_AUTOMATION_NOW = "com.example.ACTION_EXECUTE_AUTOMATION_NOW"
+        const val ACTION_CANCEL_AUTOMATION = "com.example.ACTION_CANCEL_AUTOMATION"
+        const val IS_AUTOMATION_PRE_WARNING = "IS_AUTOMATION_PRE_WARNING"
 
         fun isEmulator(): Boolean {
             return (Build.FINGERPRINT.startsWith("generic")
@@ -782,11 +1066,12 @@ class ReminderReceiver : BroadcastReceiver() {
                     .setContentText(text)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                     .setPriority(NotificationCompat.PRIORITY_MAX)
-                    .setCategory(NotificationCompat.CATEGORY_ALARM)
+                    .setCategory(if (hasLoudAlarm) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_REMINDER)
                     .setDefaults(NotificationCompat.DEFAULT_ALL)
                     .setVibrate(if (hasLoudAlarm) longArrayOf(0, 800, 400, 800, 400, 800) else longArrayOf(0, 500, 200, 500))
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
+                    .setOnlyAlertOnce(true)
                     .build()
 
                 notificationManager.notify((System.currentTimeMillis() % 10000).toInt(), notification)

@@ -808,95 +808,12 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
     }
 
     fun scheduleShiftTaskAlarm(context: Context, task: ShiftTask) {
-        if (task.isHidden || task.isCompleted) return
-
-        val parsed = parseHourMinute(task.timeScheduled) ?: return
-        val hour = parsed.first
-        val minute = parsed.second
-
-        val calendar = java.util.Calendar.getInstance().apply {
-            set(java.util.Calendar.HOUR_OF_DAY, hour)
-            set(java.util.Calendar.MINUTE, minute)
-            set(java.util.Calendar.SECOND, 0)
-            set(java.util.Calendar.MILLISECOND, 0)
-        }
-        var triggerTimeMs = calendar.timeInMillis
-        val now = System.currentTimeMillis()
-
-        // If time has passed today by more than 5s, schedule for tomorrow
-        if (triggerTimeMs < now - 5_000) {
-            calendar.add(java.util.Calendar.DAY_OF_YEAR, 1)
-            triggerTimeMs = calendar.timeInMillis
-        }
-
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val noteDetail = if (task.instruction.isNotBlank()) "📝 Chi tiết: ${task.instruction}" else "📋 Công việc: ${task.title}"
-        val intent = Intent(context, ReminderReceiver::class.java).apply {
-            putExtra("NOTE_ID", task.id)
-            putExtra("TASK_TITLE", task.title)
-            putExtra("TASK_INSTRUCTION", task.instruction)
-            putExtra("NOTE_TEXT", noteDetail)
-            putExtra("CATEGORY_NAME", if (task.hasLoudAlarm) "Chuông báo việc (${task.timeScheduled})" else "Nhắc ca làm (${task.timeScheduled})")
-            putExtra("IS_SHIFT_TASK", true)
-            putExtra("STATION_ID", task.stationId)
-            putExtra("TIME_SCHEDULED", task.timeScheduled)
-            putExtra("HAS_LOUD_ALARM", task.hasLoudAlarm)
-            putExtra("ACTION_TYPE", task.actionType)
-            putExtra("TARGET_PACKAGE_NAME", task.targetPackageName)
-            putExtra("TARGET_APP_NAME", task.targetAppName)
-        }
-        val pendingIntent = PendingIntent.getBroadcast(
-            context,
-            task.id.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        try {
-            val showIntent = Intent(context, MainActivity::class.java)
-            val showPendingIntent = PendingIntent.getActivity(
-                context,
-                task.id.hashCode(),
-                showIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTimeMs, showPendingIntent)
-            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
-        } catch (e: Exception) {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerTimeMs,
-                        pendingIntent
-                    )
-                } else {
-                    alarmManager.setExact(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerTimeMs,
-                        pendingIntent
-                    )
-                }
-            } catch (e2: Exception) {
-                alarmManager.set(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerTimeMs,
-                    pendingIntent
-                )
-            }
-        }
+        val stName = allShiftStations.value.find { it.id == task.stationId }?.name ?: ""
+        com.example.utils.ShiftAlarmHelper.scheduleShiftTaskAlarm(context, task, stName)
     }
 
     fun cancelShiftTaskAlarm(context: Context, task: ShiftTask) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, ReminderReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            context,
-            task.id.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        alarmManager.cancel(pendingIntent)
+        com.example.utils.ShiftAlarmHelper.cancelShiftTaskAlarm(context, task)
     }
 
     fun deleteShiftTask(context: Context, task: ShiftTask) {
@@ -1682,15 +1599,19 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val showIntent = Intent(context, MainActivity::class.java)
-            val showPendingIntent = PendingIntent.getActivity(
-                context,
-                task.id.hashCode(),
-                showIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTimeMs, showPendingIntent)
-            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerTimeMs,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerTimeMs,
+                    pendingIntent
+                )
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }

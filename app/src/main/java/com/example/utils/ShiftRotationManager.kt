@@ -334,71 +334,11 @@ object ShiftRotationManager {
     }
 
     private fun scheduleTaskAlarmDirect(context: Context, task: com.example.data.ShiftTask) {
-        val clean = task.timeScheduled.trim().replace("h", ":").replace(".", ":").replace("-", ":")
-        val parts = clean.split(":")
-        val hour = parts.getOrNull(0)?.toIntOrNull() ?: return
-        val minute = parts.getOrNull(1)?.toIntOrNull() ?: return
-
-        val calendar = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        if (calendar.timeInMillis <= System.currentTimeMillis()) {
-            calendar.add(Calendar.DAY_OF_YEAR, 1)
-        }
-
-        try {
-            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
-            val intent = Intent(context, ReminderReceiver::class.java).apply {
-                putExtra("NOTE_ID", task.id)
-                putExtra("NOTE_TEXT", task.title)
-                putExtra("CATEGORY_NAME", "Ca làm việc")
-                putExtra("IS_SHIFT_TASK", true)
-                putExtra("HAS_LOUD_ALARM", task.hasLoudAlarm)
-                putExtra("ACTION_TYPE", task.actionType)
-                putExtra("TARGET_PACKAGE_NAME", task.targetPackageName)
-                putExtra("TARGET_APP_NAME", task.targetAppName)
-            }
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                task.id.hashCode(),
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    calendar.timeInMillis,
-                    pendingIntent
-                )
-            } else {
-                alarmManager.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    calendar.timeInMillis,
-                    pendingIntent
-                )
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        ShiftAlarmHelper.scheduleShiftTaskAlarm(context, task)
     }
 
     private fun cancelTaskAlarmDirect(context: Context, task: com.example.data.ShiftTask) {
-        try {
-            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
-            val intent = Intent(context, ReminderReceiver::class.java)
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                task.id.hashCode(),
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            alarmManager.cancel(pendingIntent)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        ShiftAlarmHelper.cancelShiftTaskAlarm(context, task)
     }
 
     fun sendRotationNotification(context: Context, title: String, message: String) {
