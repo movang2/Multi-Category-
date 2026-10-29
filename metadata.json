@@ -1,0 +1,6 @@
+{
+  "name": "Multi-Category Notes",
+  "description": "A feature-rich notes application with multi-category management, images, custom styling, pin, tags, voice features, lock protection, and export/import functionality.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

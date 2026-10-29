@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Multi-Category Notes</string>
+    <string name="device_admin_label">Khóa màn hình tự động</string>
+    <string name="device_admin_description">Cho phép ứng dụng tự động khóa màn hình và đóng ứng dụng khi đến giờ hẹn đi ngủ.</string>
+</resources>
