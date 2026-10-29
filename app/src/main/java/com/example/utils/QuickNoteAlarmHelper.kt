@@ -37,21 +37,51 @@ object QuickNoteAlarmHelper {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerTimeMs,
-                    pendingIntent
-                )
-            } else {
-                alarmManager.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerTimeMs,
-                    pendingIntent
-                )
+            val showIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                putExtra("LAUNCH_NOTE_ID", note.id)
+                putExtra("IS_QUICK_NOTE", true)
+                putExtra("QUICK_NOTE_ID", note.id)
             }
+            val showPendingIntent = PendingIntent.getActivity(
+                context,
+                note.id.hashCode() + 5002,
+                showIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTimeMs, showPendingIntent)
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
         } catch (e: Exception) {
-            e.printStackTrace()
+            try {
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+                val intent = Intent(context, ReminderReceiver::class.java).apply {
+                    putExtra("NOTE_ID", note.id)
+                    putExtra("NOTE_TEXT", note.text)
+                    putExtra("CATEGORY_NAME", "Ghi chú nhanh")
+                    putExtra("IS_QUICK_NOTE", true)
+                }
+                val pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    note.id.hashCode() + 5001,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerTimeMs,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setExact(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerTimeMs,
+                        pendingIntent
+                    )
+                }
+            } catch (e2: Exception) {
+                e2.printStackTrace()
+            }
         }
     }
 
