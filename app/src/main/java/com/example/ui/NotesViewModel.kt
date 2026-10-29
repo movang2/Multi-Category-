@@ -32,6 +32,7 @@ import com.example.data.RoadmapTask
 import com.example.ai.AiRoadmapPlan
 import com.example.ai.AiRoadmapChatMessage
 import com.example.ai.AiRoadmapTaskStep
+import com.example.ai.RoadmapPlanType
 import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -1420,27 +1421,42 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
 
     fun generateExternalRoadmapPrompt(
         topic: String,
-        startDate: String = "2026-10-21",
-        durationDays: Int = 30,
-        category: String = "Nông nghiệp"
+        startDate: String = "2026-10-29",
+        durationDays: Int = 90,
+        category: String = "Nông nghiệp",
+        planType: RoadmapPlanType = RoadmapPlanType.AUTO
     ): String {
-        return aiScheduleService.generateExternalRoadmapPrompt(topic, startDate, durationDays, category)
+        return aiScheduleService.generateExternalRoadmapPrompt(topic, startDate, durationDays, category, planType)
+    }
+
+    fun analyzeRoadmapIntent(
+        topic: String,
+        currentDurationDays: Int = 90,
+        selectedPlanType: RoadmapPlanType = RoadmapPlanType.AUTO
+    ): AiScheduleService.RoadmapIntentAnalysis {
+        return aiScheduleService.analyzeRoadmapIntent(topic, currentDurationDays, selectedPlanType)
     }
 
     fun importExternalAiRoadmap(rawText: String): Pair<Boolean, String> {
         val (plan, errorMsg) = aiScheduleService.parseExternalRoadmap(rawText)
         if (plan != null) {
+            val typeLabel = when (plan.planType) {
+                "SHORT_EVENT" -> "⚡ Sự kiện ngắn"
+                "TIME_BOUND" -> "⏱️ Có thời hạn"
+                "HYBRID" -> "🔀 Lịch trình hỗn hợp"
+                else -> "📅 Kế hoạch đa tháng"
+            }
             val userMsg = AiRoadmapChatMessage(
                 isUser = true,
                 text = "📥 [Đã nạp lộ trình từ AI ngoài: ${plan.title}]"
             )
             val aiMsg = AiRoadmapChatMessage(
                 isUser = false,
-                text = "🎉 **Đã nhập thành công lộ trình từ AI ngoài!**\n\n📌 **Lộ trình:** ${plan.icon} ${plan.title}\n📂 **Danh mục:** ${plan.category}\n📅 **Thời lượng:** ${plan.totalDays} ngày (${plan.tasks.size} mốc công việc)\n📝 **Mô tả:** ${plan.description}\n\nBạn có thể kiểm tra danh sách các mốc bên dưới và nhấn **'Áp dụng và lưu lộ trình'** để bắt đầu theo dõi.",
+                text = "🎉 **Đã nhập thành công lộ trình từ AI ngoài!**\n\n📌 **Lộ trình:** ${plan.icon} ${plan.title}\n🏷️ **Phân loại:** $typeLabel\n📂 **Danh mục:** ${plan.category}\n📅 **Thời lượng:** ${plan.totalDays} ngày (${plan.tasks.size} mốc công việc)${if (plan.eventDate != null) "\n⏰ **Sự kiện:** ${plan.eventDate} ${plan.eventTime ?: ""}" else ""}${if (plan.timezone != null) "\n🌏 **Múi giờ:** ${plan.timezone}" else ""}\n📝 **Mô tả:** ${plan.description}\n\nBạn có thể kiểm tra danh sách các mốc bên dưới và nhấn **'Áp dụng và lưu lộ trình'** để bắt đầu theo dõi.",
                 roadmapPlan = plan
             )
             aiRoadmapChatMessages.value = aiRoadmapChatMessages.value + userMsg + aiMsg
-            return Pair(true, "Đã nhập thành công lộ trình '${plan.title}' với ${plan.tasks.size} mốc công việc!")
+            return Pair(true, "Đã nhập thành công lộ trình '${plan.title}' ($typeLabel) với ${plan.tasks.size} mốc công việc!")
         } else {
             return Pair(false, errorMsg ?: "Không thể phân tích cú pháp lộ trình.")
         }

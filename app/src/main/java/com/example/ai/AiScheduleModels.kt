@@ -63,8 +63,17 @@ data class AiRoadmapTaskStep(
     var title: String = "",
     var instruction: String = "",
     var priority: String = "Bình thường",
-    var hasLoudAlarm: Boolean = false
+    var hasLoudAlarm: Boolean = false,
+    var timezone: String? = null
 )
+
+enum class RoadmapPlanType(val code: String, val displayName: String, val icon: String, val desc: String) {
+    AUTO("AUTO", "Tự động nhận diện bằng AI", "🤖", "Tự động phân loại: Sự kiện ngắn, Công việc có hạn hay Kế hoạch đa tháng"),
+    SHORT_EVENT("SHORT_EVENT", "Sự kiện ngắn", "⚡", "Chuyến bay, đi khám, cuộc hẹn, thi cử (vài tiếng đến 1-2 ngày)"),
+    TIME_BOUND("TIME_BOUND", "Công việc có thời hạn", "⏱️", "Chuyển nhà, hoàn tất giấy tờ, dự án trong 3 - 14 ngày"),
+    MULTI_DAY("MULTI_DAY", "Kế hoạch nhiều ngày", "📅", "Trồng trọt, canh tác, học ngoại ngữ, tập gym (30 - 100 ngày)"),
+    HYBRID("HYBRID", "Lịch trình hỗn hợp", "🔀", "Chuẩn bị trước + Sự kiện chính + Ổn định/theo dõi sau sự kiện")
+}
 
 data class AiRoadmapPlan(
     val title: String,
@@ -72,7 +81,14 @@ data class AiRoadmapPlan(
     val icon: String = "🌱",
     val totalDays: Int = 30,
     val description: String = "",
-    val tasks: List<AiRoadmapTaskStep>
+    val tasks: List<AiRoadmapTaskStep>,
+    val planType: String = "MULTI_DAY",
+    val eventDate: String? = null,
+    val eventTime: String? = null,
+    val eventDurationMinutes: Int? = null,
+    val timezone: String? = null,
+    val preparationDays: Int? = null,
+    val followUpDays: Int? = null
 )
 
 data class AiRoadmapChatMessage(
@@ -82,3 +98,4 @@ data class AiRoadmapChatMessage(
     val roadmapPlan: AiRoadmapPlan? = null,
     val timestamp: Long = System.currentTimeMillis()
 )
+

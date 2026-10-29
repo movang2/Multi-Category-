@@ -806,6 +806,126 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
         return null
     }
 
+    data class RoadmapIntentAnalysis(
+        val detectedType: RoadmapPlanType,
+        val isShortEvent: Boolean,
+        val isTimeBound: Boolean,
+        val isMultiDay: Boolean,
+        val isHybrid: Boolean,
+        val detectedEventDate: String? = null,
+        val detectedEventTime: String? = null,
+        val detectedDurationHours: Double? = null,
+        val detectedPrepDays: Int? = null,
+        val detectedFollowUpDays: Int? = null,
+        val detectedOrigin: String? = null,
+        val detectedDestination: String? = null,
+        val detectedTimezone: String? = null,
+        val isShortEventConflictWith90Days: Boolean = false,
+        val suggestedDurationDays: Int = 30,
+        val conflictReason: String = ""
+    )
+
+    fun analyzeRoadmapIntent(
+        topic: String,
+        currentDurationDays: Int = 90,
+        selectedPlanType: RoadmapPlanType = RoadmapPlanType.AUTO
+    ): RoadmapIntentAnalysis {
+        val lower = topic.lowercase().trim()
+
+        // 1. Phân tích thực thể: Ngày giờ, thời lượng, địa điểm
+        val dateRegex = "(?:ngày\\s*)?(\\d{1,2}[/-]\\d{1,2}(?:[/-]\\d{4})?)".toRegex()
+        val timeRegex = "(\\b[0-2]?\\d[:h][0-5]\\d\\b|\\b[0-2]?\\d\\s*(?:giờ|h|g)\\b)".toRegex()
+        val durationRegex = "(\\d+(?:\\.\\d+)?)\\s*(?:tiếng|giờ|h|hour)".toRegex()
+        val prepRegex = "chuẩn bị\\s*(\\d+)?\\s*(?:ngày|tháng)?".toRegex()
+        val followUpRegex = "(?:sau\\s*(?:khi\\s*)?(?:về|sự kiện)|ổn định)\\s*(\\d+)?\\s*ngày".toRegex()
+
+        val detectedDateMatch = dateRegex.find(lower)?.value
+        val detectedTimeMatch = timeRegex.find(lower)?.value
+        val detectedDurationMatch = durationRegex.find(lower)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+        val detectedPrepMatch = prepRegex.find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val detectedFollowUpMatch = followUpRegex.find(lower)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+        var origin: String? = null
+        var destination: String? = null
+        if (lower.contains("busan")) origin = "Busan, Hàn Quốc"
+        if (lower.contains("việt nam") || lower.contains("vn") || lower.contains("về nước")) destination = "Việt Nam"
+
+        val timezone = when {
+            lower.contains("giờ hàn") || lower.contains("hàn quốc") || lower.contains("kst") -> "KST (UTC+9)"
+            lower.contains("giờ việt") || lower.contains("ict") -> "ICT (UTC+7)"
+            else -> null
+        }
+
+        // 2. Nhận diện các loại sự kiện
+        val shortKeywords = listOf(
+            "bay", "chuyến bay", "vé máy bay", "flight", "máy bay",
+            "khám", "bác sĩ", "bệnh viện", "phỏng vấn", "cuộc hẹn",
+            "buổi thi", "thi cử", "lấy giấy tờ", "tiệc", "đám cưới",
+            "họp", "hội thảo", "lễ", "nhận bằng"
+        )
+        val timeBoundKeywords = listOf(
+            "chuyển nhà", "dọn nhà", "hoàn thành dự án", "làm hồ sơ",
+            "thủ tục trong", "dự án trong", "xong trong 7 ngày", "xong trong 10 ngày",
+            "xong trong 14 ngày", "hoàn tất trong"
+        )
+        val multiDayKeywords = listOf(
+            "trồng", "canh tác", "nuôi", "chăm sóc cây", "học",
+            "tiếng hàn", "tiếng anh", "ielts", "tập gym", "thể hình",
+            "marathon", "du lịch", "phượt", "100 ngày", "90 ngày", "60 ngày"
+        )
+
+        val hasShort = shortKeywords.any { lower.contains(it) }
+        val hasTimeBound = timeBoundKeywords.any { lower.contains(it) }
+        val hasMultiDay = multiDayKeywords.any { lower.contains(it) }
+        val hasPrep = lower.contains("chuẩn bị") || detectedPrepMatch != null
+        val hasFollowUp = lower.contains("ổn định") || lower.contains("sau khi") || detectedFollowUpMatch != null
+
+        val autoType = when {
+            hasShort && (hasPrep || hasFollowUp) -> RoadmapPlanType.HYBRID
+            hasShort -> RoadmapPlanType.SHORT_EVENT
+            hasTimeBound -> RoadmapPlanType.TIME_BOUND
+            hasMultiDay -> RoadmapPlanType.MULTI_DAY
+            else -> RoadmapPlanType.MULTI_DAY
+        }
+
+        val effectiveType = if (selectedPlanType != RoadmapPlanType.AUTO) selectedPlanType else autoType
+
+        // 3. Xung đột giữa sự kiện ngắn và số ngày 90
+        val isConflict = (effectiveType == RoadmapPlanType.SHORT_EVENT || (effectiveType == RoadmapPlanType.AUTO && hasShort && !hasPrep)) &&
+                currentDurationDays >= 60
+
+        val suggestedDays = when (effectiveType) {
+            RoadmapPlanType.SHORT_EVENT -> if (lower.contains("qua đêm") || (detectedTimeMatch?.contains("23") == true)) 2 else 1
+            RoadmapPlanType.TIME_BOUND -> 7
+            RoadmapPlanType.HYBRID -> (detectedPrepMatch ?: 60) + (detectedFollowUpMatch ?: 3) + 2
+            RoadmapPlanType.MULTI_DAY -> currentDurationDays
+            RoadmapPlanType.AUTO -> if (hasShort) 2 else currentDurationDays
+        }
+
+        val conflictReason = if (isConflict) {
+            "Yêu cầu này có vẻ là một sự kiện ngắn (${if (detectedDurationMatch != null) "${detectedDurationMatch.toInt()} tiếng" else "vài tiếng/1-2 ngày"}), nhưng bạn đang chọn kế hoạch $currentDurationDays ngày. Bạn muốn tạo lịch trình sự kiện hay giữ kế hoạch chuẩn bị $currentDurationDays ngày?"
+        } else ""
+
+        return RoadmapIntentAnalysis(
+            detectedType = effectiveType,
+            isShortEvent = effectiveType == RoadmapPlanType.SHORT_EVENT,
+            isTimeBound = effectiveType == RoadmapPlanType.TIME_BOUND,
+            isMultiDay = effectiveType == RoadmapPlanType.MULTI_DAY,
+            isHybrid = effectiveType == RoadmapPlanType.HYBRID,
+            detectedEventDate = detectedDateMatch,
+            detectedEventTime = detectedTimeMatch,
+            detectedDurationHours = detectedDurationMatch,
+            detectedPrepDays = detectedPrepMatch,
+            detectedFollowUpDays = detectedFollowUpMatch,
+            detectedOrigin = origin,
+            detectedDestination = destination,
+            detectedTimezone = timezone,
+            isShortEventConflictWith90Days = isConflict,
+            suggestedDurationDays = suggestedDays,
+            conflictReason = conflictReason
+        )
+    }
+
     suspend fun generateRoadmapPlan(
         userPrompt: String,
         startDateStr: String,
@@ -830,43 +950,54 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
             val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
 
             val systemInstructionText = """
-                Bạn là Trợ lý Lập lộ trình & Kế hoạch Đa tháng thông minh (AI Multi-Month Roadmap & Planning Specialist) bằng tiếng Việt.
-                Người dùng muốn tạo kế hoạch / lịch trình trải dài theo tuần hoặc tháng (ví dụ: quy trình trồng trọt nông nghiệp như trồng cây ngô/lúa/rau màu 2-4 tháng, du lịch phượt xuyên Việt 1 tháng, kế hoạch học tập 3 tháng, tập gym 60 ngày, chuẩn bị đám cưới, xây nhà...).
-                Ngày bắt đầu của kế hoạch là: $startDateStr.
+                Bạn là Trợ lý Lập lộ trình & Kế hoạch AI chuyên nghiệp (AI Multi-Month & Event Roadmap Specialist) bằng tiếng Việt.
+                Ngày bắt đầu kế hoạch: $startDateStr.
 
-                Nhiệm vụ của bạn:
-                1. Hiểu mục tiêu và thời lượng của người dùng.
-                2. Đưa ra lời tư vấn chuyên môn ngắn gọn, thực tế, thân thiện bằng tiếng Việt.
-                3. BẮT BUỘC cung cấp một khối JSON định dạng lộ trình chính xác nằm trong cặp ```json ... ``` với cấu trúc:
+                QUY TẮC PHÂN LOẠI YÊU CẦU THÀNH 4 LOẠI:
+                A. SỰ KIỆN NGẮN (SHORT_EVENT): Chuyến bay, đi khám bác sĩ, cuộc hẹn, thi cử, phỏng vấn, lấy giấy tờ (vài tiếng đến 1-2 ngày).
+                   - Tạo 5-12 nhiệm vụ thực tế quanh sự kiện.
+                   - KHÔNG trải dài thành 30 hay 90 ngày.
+                B. CÔNG VIỆC CÓ THỜI HẠN (TIME_BOUND): Chuyển nhà, hoàn tất hồ sơ dự án trong 3 - 14 ngày.
+                C. KẾ HOẠCH DÀI HẠN (MULTI_DAY): Trồng cà chua 100 ngày, học tiếng Hàn 90 ngày, rèn luyện 30-60 ngày. Phân bổ các giai đoạn phát triển.
+                D. LỊCH TRÌNH HỖN HỢP (HYBRID): Tách riêng Thời gian chuẩn bị trước + Thời lượng sự kiện + Thời gian theo dõi/ổn định sau sự kiện.
+
+                QUY TẮC THỜI GIAN VÀ QUA ĐÊM:
+                - Nếu sự kiện bắt đầu đêm (ví dụ 23:00) và kéo dài qua nửa đêm (ví dụ đến 03:00 sáng hôm sau): các nhiệm vụ sau 00:00 PHẢI có dayOffset = 1 (hoặc mốc ngày kế tiếp).
+                - Ghi rõ múi giờ nếu có chênh lệch (ví dụ Hàn Quốc KST UTC+9 sang Việt Nam ICT UTC+7).
+                - Không tự bịa số hiệu chuyến bay / sân bay chưa xác nhận, ghi chú "cần đối chiếu vé thật".
+
+                BẮT BUỘC trả về khối JSON trong ```json ... ```:
                 ```json
                 {
-                  "roadmapTitle": "Tiêu đề lộ trình (ví dụ: Kế hoạch Trồng ngô lai 90 ngày hoặc Hành trình Du lịch Xuyên Việt 30 ngày)",
-                  "category": "Nông nghiệp", // Một trong các loại: "Nông nghiệp", "Du lịch", "Học tập", "Thể thao", "Đời sống", "Khác"
-                  "icon": "🌽", // Icon emoji phù hợp (ví dụ: 🌽, 🌾, 🛵, 🗺️, 📚, 🏋️, 🏡)
-                  "totalDays": 90, // Tổng số ngày của toàn bộ kế hoạch
-                  "description": "Mô tả tóm tắt mục tiêu và các mốc chính",
+                  "roadmapTitle": "Tiêu đề lộ trình",
+                  "category": "Nông nghiệp", // Hoặc: Du lịch, Học tập, Sức khỏe, Đời sống, Sự kiện
+                  "icon": "🌱",
+                  "totalDays": 90, // Số ngày thực tế (1-2 ngày đối với sự kiện ngắn)
+                  "planType": "SHORT_EVENT", // SHORT_EVENT, TIME_BOUND, MULTI_DAY, HYBRID
+                  "eventDate": "29/12/2026", // Nếu có
+                  "eventTime": "23:00", // Nếu có
+                  "eventDurationMinutes": 240, // Nếu có
+                  "timezone": "KST / ICT", // Nếu có
+                  "description": "Tóm tắt lộ trình",
                   "tasks": [
                     {
-                      "dayOffset": 0, // Ngày thứ mấy tính từ ngày bắt đầu (0 = Ngày bắt đầu, 4 = Ngày thứ 5, 14 = Ngày thứ 15...)
-                      "scheduledTime": "08:00", // Giờ thực hiện (HH:mm)
-                      "phase": "Giai đoạn 1: Làm đất & Gieo hạt", // Tên chặng hoặc giai đoạn
-                      "title": "Cày bừa đất & Bón phân lót",
-                      "instruction": "Cày sâu 20-25cm, bón lót phân chuồng hoai mục và NPK, lên luống thoát nước.",
-                      "priority": "Cao", // "Cao", "Bình thường", "Thấp"
-                      "hasLoudAlarm": false
+                      "dayOffset": 0,
+                      "scheduledTime": "19:00",
+                      "phase": "Giai đoạn 1: Chuẩn bị",
+                      "title": "Tên nhiệm vụ",
+                      "instruction": "Chi tiết hướng dẫn",
+                      "priority": "Cao",
+                      "hasLoudAlarm": false,
+                      "timezone": "KST"
                     }
                   ]
                 }
                 ```
-                QUY TẮC PHÂN BỔ THỜI GIAN:
-                - `dayOffset`: Bắt đầu từ 0 (ngày đầu tiên), tăng dần theo các mốc thực tế (ví dụ: ngày 0, ngày 3, ngày 10, ngày 20, ngày 35, ngày 60, ngày 90...).
-                - Các công việc phải chia đều qua các tuần/tháng theo chu kỳ thực tế, có hướng dẫn cụ thể dễ làm theo.
             """.trimIndent()
 
             val requestBodyJson = JSONObject().apply {
                 val contentsArray = JSONArray()
 
-                // Add recent history for context
                 history.takeLast(6).forEach { msg ->
                     val contentObj = JSONObject().apply {
                         put("role", if (msg.isUser) "user" else "model")
@@ -878,7 +1009,6 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                     contentsArray.put(contentObj)
                 }
 
-                // Add current user prompt
                 contentsArray.put(JSONObject().apply {
                     put("role", "user")
                     put("parts", JSONArray().apply {
@@ -954,46 +1084,85 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                 val title = planJson.optString("roadmapTitle", "Lộ trình đề xuất")
                 val category = planJson.optString("category", "Đời sống")
                 val icon = planJson.optString("icon", "🌱")
-                val totalDays = planJson.optInt("totalDays", 30)
+                var totalDays = planJson.optInt("totalDays", 30)
                 val desc = planJson.optString("description", "")
-                val tasksArray = planJson.optJSONArray("tasks")
+                val planType = planJson.optString("planType", "MULTI_DAY")
+                val eventDate = if (planJson.has("eventDate")) planJson.optString("eventDate") else null
+                val eventTime = if (planJson.has("eventTime")) planJson.optString("eventTime") else null
+                val durationMin = if (planJson.has("eventDurationMinutes")) planJson.optInt("eventDurationMinutes") else null
+                val timezone = if (planJson.has("timezone")) planJson.optString("timezone") else null
+                val prepDays = if (planJson.has("preparationDays")) planJson.optInt("preparationDays") else null
+                val followUpDays = if (planJson.has("followUpDays")) planJson.optInt("followUpDays") else null
 
+                val tasksArray = planJson.optJSONArray("tasks")
                 val tasksList = mutableListOf<AiRoadmapTaskStep>()
                 if (tasksArray != null) {
+                    var prevTimeMinutes = -1
+                    var currentDayOffsetAccum = 0
+
                     for (i in 0 until tasksArray.length()) {
                         val tObj = tasksArray.optJSONObject(i) ?: continue
-                        val dayOffset = tObj.optInt("dayOffset", i)
-                        val time = tObj.optString("scheduledTime", "08:00")
+                        var dayOffset = tObj.optInt("dayOffset", i)
+                        val rawTime = tObj.optString("scheduledTime", "08:00")
+                        val time = normalizeTime(rawTime)
                         val phase = tObj.optString("phase", "Giai đoạn ${i / 4 + 1}")
                         val taskTitle = tObj.optString("title", "Công việc ${i + 1}")
                         val instr = tObj.optString("instruction", "")
                         val priority = tObj.optString("priority", "Bình thường")
                         val hasLoudAlarm = tObj.optBoolean("hasLoudAlarm", false)
+                        val tTimezone = if (tObj.has("timezone")) tObj.optString("timezone") else timezone
+
+                        // Kiểm tra nếu sự kiện kéo dài qua đêm (ví dụ 23:00 -> 02:00) mà dayOffset chưa tăng
+                        val timeParts = time.split(":")
+                        val curMinutes = (timeParts.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (timeParts.getOrNull(1)?.toIntOrNull() ?: 0)
+                        if (prevTimeMinutes >= 20 * 60 && curMinutes <= 6 * 60 && dayOffset == 0 && currentDayOffsetAccum == 0) {
+                            currentDayOffsetAccum = 1
+                        }
+                        if (currentDayOffsetAccum > 0 && dayOffset == 0) {
+                            dayOffset += currentDayOffsetAccum
+                        }
+                        prevTimeMinutes = curMinutes
 
                         tasksList.add(
                             AiRoadmapTaskStep(
                                 dayOffset = dayOffset,
-                                scheduledTime = normalizeTime(time),
+                                scheduledTime = time,
                                 phase = phase,
                                 title = taskTitle,
                                 instruction = instr,
                                 priority = priority,
-                                hasLoudAlarm = hasLoudAlarm
+                                hasLoudAlarm = hasLoudAlarm,
+                                timezone = tTimezone
                             )
                         )
                     }
                 }
 
                 if (tasksList.isNotEmpty()) {
+                    val maxOffset = tasksList.maxOfOrNull { it.dayOffset } ?: 0
+                    // Chuẩn hóa totalDays nếu là sự kiện ngắn
+                    if (planType == "SHORT_EVENT" || (maxOffset <= 1 && totalDays >= 30)) {
+                        totalDays = maxOffset + 1
+                    } else {
+                        totalDays = totalDays.coerceAtLeast(maxOffset + 1)
+                    }
+
                     val roadmapPlan = AiRoadmapPlan(
                         title = title,
                         category = category,
                         icon = icon,
-                        totalDays = totalDays.coerceAtLeast(tasksList.maxOfOrNull { it.dayOffset }?.plus(1) ?: 30),
+                        totalDays = totalDays,
                         description = desc,
-                        tasks = tasksList
+                        tasks = tasksList,
+                        planType = planType,
+                        eventDate = eventDate,
+                        eventTime = eventTime,
+                        eventDurationMinutes = durationMin,
+                        timezone = timezone,
+                        preparationDays = prepDays,
+                        followUpDays = followUpDays
                     )
-                    return Pair(chatText.ifBlank { "Dưới đây là lộ trình chi tiết theo ngày tôi đã thiết kế cho bạn:" }, roadmapPlan)
+                    return Pair(chatText.ifBlank { "Dưới đây là lộ trình chi tiết theo loại hình đã nhận diện:" }, roadmapPlan)
                 }
             }
         } catch (e: Exception) {
@@ -1004,7 +1173,355 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
 
     private fun generateSmartLocalRoadmap(prompt: String, startDateStr: String): Pair<String, AiRoadmapPlan?> {
         val p = prompt.lowercase()
+        val analysis = analyzeRoadmapIntent(prompt)
+
         return when {
+            // Case 1: Chuyến bay Busan -> Việt Nam (Sự kiện ngắn hoặc Hỗn hợp)
+            p.contains("bay") || p.contains("chuyến bay") || p.contains("máy bay") || p.contains("busan") -> {
+                val isHybrid = p.contains("chuẩn bị") || p.contains("về nước") || p.contains("60 ngày") || analysis.isHybrid
+
+                if (isHybrid) {
+                    val tasks = listOf(
+                        AiRoadmapTaskStep(
+                            dayOffset = 0,
+                            scheduledTime = "09:00",
+                            phase = "Giai đoạn 1: Lập kế hoạch chuẩn bị (Trước 60 ngày)",
+                            title = "Rà soát thủ tục về nước & Giấy tờ tùy thân",
+                            instruction = "Kiểm tra hạn hộ chiếu, hạn visa xuất cảnh Hàn Quốc, lập danh mục đồ đạc cần mang về hoặc gửi hàng trước.",
+                            priority = "Cao"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 15,
+                            scheduledTime = "14:00",
+                            phase = "Giai đoạn 1: Lập kế hoạch chuẩn bị (Trước 45 ngày)",
+                            title = "Thanh lý đồ dùng & Thông báo trả phòng trọ",
+                            instruction = "Thông báo chủ nhà về thời điểm trả phòng, thanh lý đồ điện tử, bàn ghế và gửi các kiện hàng cồng kềnh qua bưu điện/đường biển.",
+                            priority = "Bình thường"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 30,
+                            scheduledTime = "10:00",
+                            phase = "Giai đoạn 2: Xác nhận lịch trình & Vé máy bay",
+                            title = "Kiểm tra xác nhận vé máy bay & Quy định hành lý",
+                            instruction = "Xác nhận giờ khởi hành 23:00 ngày 29/12/2026 tại sân bay Gimhae (Busan) đi Việt Nam. Cần đối chiếu vé thật để xác nhận sân bay đến.",
+                            priority = "Cao"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 55,
+                            scheduledTime = "15:00",
+                            phase = "Giai đoạn 2: Đóng gói & Hoàn tất thủ tục tại Hàn",
+                            title = "Đóng gói hành lý ký gửi & Đổi tiền mặt",
+                            instruction = "Cân hành lý đúng tiêu chuẩn hãng, đóng gói kỹ quà biếu, đổi tiền Won sang VND/USD phòng thân.",
+                            priority = "Cao"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 61,
+                            scheduledTime = "19:00",
+                            phase = "Giai đoạn 3: Sự kiện chính - Chuyến bay (29/12/2026)",
+                            title = "Khởi hành ra sân bay Gimhae Busan",
+                            instruction = "Có mặt tại sân bay trước 3 tiếng. Kiểm tra kỹ hộ chiếu, vé điện tử và CCCD.",
+                            priority = "Cao",
+                            hasLoudAlarm = true,
+                            timezone = "KST (UTC+9)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 61,
+                            scheduledTime = "20:30",
+                            phase = "Giai đoạn 3: Sự kiện chính - Chuyến bay (29/12/2026)",
+                            title = "Check-in tại quầy & Gửi hành lý ký gửi",
+                            instruction = "Cân hành lý, nhận thẻ lên tàu bay (boarding pass) và kiểm tra cửa ra máy bay (gate).",
+                            priority = "Cao",
+                            timezone = "KST (UTC+9)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 61,
+                            scheduledTime = "23:00",
+                            phase = "Giai đoạn 3: Sự kiện chính - Chuyến bay (29/12/2026)",
+                            title = "Chuyến bay cất cánh từ Busan đi Việt Nam",
+                            instruction = "Thời gian bay dự kiến khoảng 4 tiếng. Cài dây an toàn và nghỉ ngơi trên chuyến bay.",
+                            priority = "Cao",
+                            timezone = "KST (UTC+9)"
+                        ),
+                        // Nhiệm vụ qua đêm sang ngày hôm sau
+                        AiRoadmapTaskStep(
+                            dayOffset = 62,
+                            scheduledTime = "02:00",
+                            phase = "Giai đoạn 3: Sự kiện chính - Hạ cánh (30/12/2026)",
+                            title = "Hạ cánh an toàn tại sân bay Việt Nam",
+                            instruction = "Máy bay hạ cánh dự kiến 02:00 sáng (giờ Việt Nam ICT, chênh lệch -2h so với Hàn Quốc). Bật điện thoại di động.",
+                            priority = "Cao",
+                            timezone = "ICT (UTC+7)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 62,
+                            scheduledTime = "03:00",
+                            phase = "Giai đoạn 3: Sự kiện chính - Hạ cánh (30/12/2026)",
+                            title = "Nhập cảnh & Nhận hành lý tại băng chuyền",
+                            instruction = "Xuất trình hộ chiếu qua cổng kiểm soát xuất nhập cảnh, lấy hành lý ký gửi và qua cửa hải quan.",
+                            priority = "Bình thường",
+                            timezone = "ICT (UTC+7)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 62,
+                            scheduledTime = "04:30",
+                            phase = "Giai đoạn 4: Theo dõi & Ổn định sau sự kiện (Ngày 1)",
+                            title = "Về đến nơi lưu trú / nhà riêng & Nghỉ ngơi",
+                            instruction = "Về đến nhà an toàn, báo tin cho người thân và ngủ nghỉ hồi phục sức khỏe sau chuyến bay đêm.",
+                            priority = "Bình thường",
+                            timezone = "ICT (UTC+7)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 63,
+                            scheduledTime = "10:00",
+                            phase = "Giai đoạn 4: Theo dõi & Ổn định sau sự kiện (Ngày 2)",
+                            title = "Mở kiện hành lý & Lắp SIM điện thoại nội địa",
+                            instruction = "Sắp xếp lại tư trang, kiểm tra quà tặng mang về, kích hoạt gói cước data SIM tại Việt Nam.",
+                            priority = "Bình thường"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 64,
+                            scheduledTime = "09:00",
+                            phase = "Giai đoạn 4: Theo dõi & Ổn định sau sự kiện (Ngày 3)",
+                            title = "Đăng ký cư trú & Hoàn tất ổn định sinh hoạt",
+                            instruction = "Làm thủ tục khai báo tạm trú/thường trú tại địa phương nếu cần, hoàn tất lộ trình về nước thành công.",
+                            priority = "Bình thường"
+                        )
+                    )
+                    val plan = AiRoadmapPlan(
+                        title = "Lộ trình Chuẩn bị về nước & Chuyến bay Busan - Việt Nam",
+                        category = "Du lịch",
+                        icon = "✈️",
+                        totalDays = 65,
+                        description = "Lịch trình hỗn hợp kết hợp 60 ngày chuẩn bị kỹ lưỡng tại Hàn Quốc, chuyến bay 4 tiếng qua đêm 29-30/12/2026 và 3 ngày ổn định sau khi về Việt Nam.",
+                        tasks = tasks,
+                        planType = "HYBRID",
+                        eventDate = "29/12/2026",
+                        eventTime = "23:00",
+                        eventDurationMinutes = 240,
+                        timezone = "KST (UTC+9) -> ICT (UTC+7)",
+                        preparationDays = 60,
+                        followUpDays = 3
+                    )
+                    Pair("Tôi đã thiết lập Lịch trình Hỗn hợp (Chuẩn bị 60 ngày + Chuyến bay 4h + Ổn định 3 ngày) cho bạn:", plan)
+                } else {
+                    // Sự kiện ngắn (Short Event) tập trung quanh chuyến bay
+                    val tasks = listOf(
+                        AiRoadmapTaskStep(
+                            dayOffset = 0,
+                            scheduledTime = "18:00",
+                            phase = "Trước chuyến bay (29/12/2026)",
+                            title = "Kiểm tra túi giấy tờ & Hộ chiếu lần cuối",
+                            instruction = "Đảm bảo mang theo Hộ chiếu, CCCD, vé điện tử, sạc dự phòng không để trong hành lý ký gửi.",
+                            priority = "Cao",
+                            hasLoudAlarm = true,
+                            timezone = "KST (UTC+9)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 0,
+                            scheduledTime = "19:30",
+                            phase = "Trước chuyến bay (29/12/2026)",
+                            title = "Di chuyển đến Sân bay Quốc tế Gimhae (Busan)",
+                            instruction = "Đi tàu điện ngầm hoặc taxi đến sân bay Gimhae, tính toán trừ hao kẹt xe giờ cao điểm.",
+                            priority = "Cao",
+                            timezone = "KST (UTC+9)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 0,
+                            scheduledTime = "20:30",
+                            phase = "Tại sân bay Busan (29/12/2026)",
+                            title = "Làm thủ tục check-in & Ký gửi hành lý",
+                            instruction = "Đến quầy hãng bay làm thủ tục, gửi kiện hành lý, lấy vé lên máy bay và kiểm tra số cổng xuất cảnh.",
+                            priority = "Cao",
+                            timezone = "KST (UTC+9)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 0,
+                            scheduledTime = "21:30",
+                            phase = "Tại sân bay Busan (29/12/2026)",
+                            title = "Qua cửa kiểm tra an ninh & Hải quan xuất cảnh",
+                            instruction = "Tháo thắt lưng, bỏ áo khoác và thiết bị điện tử ra khay soi chiếu. Vào khu vực phòng chờ.",
+                            priority = "Cao",
+                            timezone = "KST (UTC+9)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 0,
+                            scheduledTime = "22:30",
+                            phase = "Lên tàu bay (Boarding)",
+                            title = "Lên máy bay & Cài dây an toàn",
+                            instruction = "Di chuyển vào cửa lên tàu bay trước 30 phút, cất hành lý xách tay vào khoang trên đầu.",
+                            priority = "Cao",
+                            timezone = "KST (UTC+9)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 0,
+                            scheduledTime = "23:00",
+                            phase = "Sự kiện: Chuyến bay Busan - Việt Nam",
+                            title = "Máy bay cất cánh từ Busan đi Việt Nam",
+                            instruction = "Thời gian bay dự kiến 4 tiếng. Điểm đến cụ thể cần xác nhận theo vé thật. Chuyển điện thoại sang chế độ máy bay.",
+                            priority = "Cao",
+                            timezone = "KST (UTC+9)"
+                        ),
+                        // Nhiệm vụ qua đêm sang ngày hôm sau (dayOffset = 1)
+                        AiRoadmapTaskStep(
+                            dayOffset = 1,
+                            scheduledTime = "02:00",
+                            phase = "Hạ cánh tại Việt Nam (30/12/2026)",
+                            title = "Máy bay hạ cánh an toàn tại Việt Nam",
+                            instruction = "Giờ Việt Nam (ICT, chậm hơn Hàn Quốc 2 tiếng). Ngồi yên cho đến khi đèn báo hiệu cài dây an toàn tắt.",
+                            priority = "Cao",
+                            timezone = "ICT (UTC+7)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 1,
+                            scheduledTime = "02:45",
+                            phase = "Sau chuyến bay",
+                            title = "Nhập cảnh & Lấy hành lý tại băng chuyền",
+                            instruction = "Đến quầy nhập cảnh trình hộ chiếu, đi theo bảng chỉ dẫn đến băng chuyền nhận kiện hành lý ký gửi.",
+                            priority = "Cao",
+                            timezone = "ICT (UTC+7)"
+                        ),
+                        AiRoadmapTaskStep(
+                            dayOffset = 1,
+                            scheduledTime = "03:45",
+                            phase = "Sau chuyến bay",
+                            title = "Di chuyển về nơi lưu trú & Nghỉ ngơi",
+                            instruction = "Đón taxi hoặc xe gia đình đón, về đến nhà và nghỉ ngơi phục hồi sức khỏe sau chuyến bay đêm.",
+                            priority = "Bình thường",
+                            timezone = "ICT (UTC+7)"
+                        )
+                    )
+                    val plan = AiRoadmapPlan(
+                        title = "Lịch trình Chuyến bay Busan - Việt Nam (4 tiếng qua đêm)",
+                        category = "Du lịch",
+                        icon = "✈️",
+                        totalDays = 2,
+                        description = "Sự kiện ngắn có thời điểm cố định: Khởi hành 23:00 (giờ Hàn Quốc) ngày 29/12/2026 từ Busan, bay 4 tiếng và hạ cánh 02:00 sáng hôm sau tại Việt Nam (giờ ICT).",
+                        tasks = tasks,
+                        planType = "SHORT_EVENT",
+                        eventDate = "29/12/2026",
+                        eventTime = "23:00",
+                        eventDurationMinutes = 240,
+                        timezone = "KST (UTC+9) / ICT (UTC+7)"
+                    )
+                    Pair("Tôi đã thiết lập Lịch trình Sự kiện Ngắn tập trung đúng vào chuyến bay qua đêm của bạn:", plan)
+                }
+            }
+
+            // Case 2: Cà chua 100 ngày
+            p.contains("cà chua") -> {
+                val tasks = listOf(
+                    AiRoadmapTaskStep(dayOffset = 0, scheduledTime = "07:30", phase = "Giai đoạn 1: Chuẩn bị giá thể & Ươm giống", title = "Ngâm ủ hạt giống cà chua & Làm đất bầu", instruction = "Ngâm hạt nước ấm 50°C trong 4-6 giờ, ủ vải ẩm. Đất trộn tro trấu, xơ dừa, phân chuồng hoai mục."),
+                    AiRoadmapTaskStep(dayOffset = 5, scheduledTime = "08:00", phase = "Giai đoạn 1: Chuẩn bị giá thể & Ươm giống", title = "Gieo hạt vào khay ươm & Tưới phun sương", instruction = "Gieo sâu 0.5cm, tưới phun sương nhẹ giữ ẩm, che lưới đen tránh nắng gắt."),
+                    AiRoadmapTaskStep(dayOffset = 20, scheduledTime = "16:30", phase = "Giai đoạn 2: Cấy cây con ra luống & Bón lót", title = "Trồng cây con ra luống đất chính", instruction = "Chọn cây 4-5 lá thật mập mạp. Bón lót lân và phân hữu cơ vi sinh, trồng cách nhau 50cm, tưới đẫm nước."),
+                    AiRoadmapTaskStep(dayOffset = 35, scheduledTime = "08:00", phase = "Giai đoạn 3: Cắm cọc giàn & Tỉa chồi nách", title = "Làm giàn chữ A & Tỉa bỏ toàn bộ chồi nách", instruction = "Cắm cọc tre cố định thân cây chống đổ. Tỉa sạch các chồi phụ mọc ở nách lá, chỉ giữ lại thân chính."),
+                    AiRoadmapTaskStep(dayOffset = 50, scheduledTime = "08:00", phase = "Giai đoạn 4: Ra hoa rộ & Bón thúc nuôi hoa", title = "Bón thúc đợt 1 & Rung cây trợ thụ phấn", instruction = "Bón NPK cân đối, rung nhẹ giàn cây vào lúc 8-9h sáng để tăng tỷ lệ đậu quả."),
+                    AiRoadmapTaskStep(dayOffset = 65, scheduledTime = "08:30", phase = "Giai đoạn 5: Quả non phát triển & Phòng nứt quả", title = "Bổ sung Canxi-Bo & Phòng nấm mốc sương mai", instruction = "Phun phân bón lá Canxi-Bo để vỏ dày chống nứt quả và thối đít. Cắt bỏ lá già sát gốc tạo độ thông thoáng."),
+                    AiRoadmapTaskStep(dayOffset = 80, scheduledTime = "08:00", phase = "Giai đoạn 6: Quả già & Chuyển màu chín", title = "Bón tăng cường Kali & Giảm lượng nước tưới", instruction = "Bón kali sulphate giúp quả ngọt đậm, màu đỏ bóng đẹp. Giảm nước tưới tránh nứt vỏ khi chín."),
+                    AiRoadmapTaskStep(dayOffset = 100, scheduledTime = "07:00", phase = "Giai đoạn 7: Thu hoạch cà chua chín rộ", title = "Thu hoạch chùm quả cà chua tươi mọng", instruction = "Cắt cuống nhẹ nhàng lúc quả chín đỏ đều 90%. Xếp vào sọt có lót giấy mềm để bảo quản.")
+                )
+                val plan = AiRoadmapPlan(
+                    title = "Quy trình Trồng Cà chua Hữu cơ Năng suất cao (100 ngày)",
+                    category = "Nông nghiệp",
+                    icon = "🍅",
+                    totalDays = 100,
+                    description = "Lộ trình 100 ngày từ gieo ươm, làm giàn cọc, tỉa chồi nách, nuôi hoa thụ phấn đến thu hoạch quả mọng ngọt.",
+                    tasks = tasks,
+                    planType = "MULTI_DAY"
+                )
+                Pair("Tôi đã thiết lập lộ trình 100 ngày trồng cà chua chuẩn nông nghiệp cho bạn:", plan)
+            }
+
+            // Case 3: Học tiếng Hàn 90 ngày
+            p.contains("tiếng hàn") || p.contains("hàn ngữ") || p.contains("topik") -> {
+                val tasks = listOf(
+                    AiRoadmapTaskStep(dayOffset = 0, scheduledTime = "19:00", phase = "Tháng 1: Nhập môn & Bảng chữ cái Hangeul", title = "Học thuộc 21 nguyên âm và 19 phụ âm Hangeul", instruction = "Luyện viết chuẩn nét chữ Hangeul, học cách ghép âm tiết và quy tắc âm đệm cơ bản."),
+                    AiRoadmapTaskStep(dayOffset = 10, scheduledTime = "19:30", phase = "Tháng 1: Nhập môn & Bảng chữ cái Hangeul", title = "Nắm vững 7 quy tắc biến âm & Nối âm", instruction = "Luyện quy tắc nối âm (연음), nhũ hóa (유음화), biến âm mũi (비음화) để phát âm chuẩn xác."),
+                    AiRoadmapTaskStep(dayOffset = 25, scheduledTime = "20:00", phase = "Tháng 1: Nhập môn & Bảng chữ cái Hangeul", title = "Học 300 từ vựng căn bản & Đuôi câu -ㅂ/습니다", instruction = "Học từ vựng đồ vật, gia đình, nghề nghiệp. Cách dùng câu trần thuật và nghi vấn trang trọng."),
+                    AiRoadmapTaskStep(dayOffset = 40, scheduledTime = "19:30", phase = "Tháng 2: Ngữ pháp Giao tiếp Sơ cấp", title = "Luyện đuôi câu thân mật -아/어요 & Thì quá khứ", instruction = "Nắm vững cách chia nguyên âm dương/âm, thì quá khứ -았/었어요 và trợ từ chủ ngữ/tân ngữ."),
+                    AiRoadmapTaskStep(dayOffset = 55, scheduledTime = "20:00", phase = "Tháng 2: Ngữ pháp Giao tiếp Sơ cấp", title = "Học số đếm Thuần Hàn, Hán Hàn & Mua sắm", instruction = "Phân biệt dùng số đếm giờ giấc, tuổi tác, giá tiền. Thực hành hội thoại hỏi đường, mua đồ."),
+                    AiRoadmapTaskStep(dayOffset = 70, scheduledTime = "19:30", phase = "Tháng 3: Phản xạ Hội thoại & Đời sống Hàn", title = "Luyện nghe Podcast tiếng Hàn & Shadowing ngắn", instruction = "Nghe các đoạn hội thoại thực tế về công việc xưởng/công ty, nhà hàng, bệnh viện tại Hàn."),
+                    AiRoadmapTaskStep(dayOffset = 90, scheduledTime = "09:00", phase = "Tổng kết & Đánh giá năng lực", title = "Giải đề thi thử TOPIK I & Kiểm tra phản xạ", instruction = "Làm trọn vẹn 1 đề thi TOPIK cấp độ 1-2, đánh giá điểm nghe hiểu và đọc hiểu sau 90 ngày nỗ lực.")
+                )
+                val plan = AiRoadmapPlan(
+                    title = "Lộ trình Tự học Tiếng Hàn Giao tiếp & TOPIK I (90 ngày)",
+                    category = "Học tập",
+                    icon = "🇰🇷",
+                    totalDays = 90,
+                    description = "Kế hoạch 3 tháng toàn diện từ bảng chữ Hangeul, ngữ pháp sơ cấp đến phản xạ nghe nói đời sống tại Hàn Quốc.",
+                    tasks = tasks,
+                    planType = "MULTI_DAY"
+                )
+                Pair("Tôi đã thiết lập lộ trình học tiếng Hàn 90 ngày từng giai đoạn vững chắc cho bạn:", plan)
+            }
+
+            // Case 4: Đi khám bác sĩ (Sự kiện ngắn 2 tiếng)
+            p.contains("khám") || p.contains("bác sĩ") || p.contains("bệnh viện") -> {
+                val tasks = listOf(
+                    AiRoadmapTaskStep(
+                        dayOffset = 0,
+                        scheduledTime = "07:30",
+                        phase = "Trước buổi khám (Chuẩn bị)",
+                        title = "Chuẩn bị hồ sơ khám, BHYT & Nhịn ăn sáng",
+                        instruction = "Mang theo CCCD, thẻ BHYT, sổ khám cũ và đơn thuốc đang dùng. Nhịn ăn sáng nếu cần làm xét nghiệm máu/nước tiểu.",
+                        priority = "Cao",
+                        hasLoudAlarm = true
+                    ),
+                    AiRoadmapTaskStep(
+                        dayOffset = 0,
+                        scheduledTime = "08:30",
+                        phase = "Tại bệnh viện / phòng khám",
+                        title = "Lấy số thứ tự & Đăng ký phòng khám chuyên khoa",
+                        instruction = "Đến quầy tiếp đón, đo huyết áp, nhiệt độ ban đầu và nhận số vào phòng khám chuyên khoa.",
+                        priority = "Bình thường"
+                    ),
+                    AiRoadmapTaskStep(
+                        dayOffset = 0,
+                        scheduledTime = "09:00",
+                        phase = "Sự kiện chính: Khám bệnh (Thời lượng ~2 tiếng)",
+                        title = "Bác sĩ thăm khám lâm sàng trực tiếp",
+                        instruction = "Trình bày rõ các triệu chứng, thời gian xuất hiện và thói quen sinh hoạt. Nhận chỉ định cận lâm sàng.",
+                        priority = "Cao"
+                    ),
+                    AiRoadmapTaskStep(
+                        dayOffset = 0,
+                        scheduledTime = "09:40",
+                        phase = "Sự kiện chính: Khám bệnh (Thời lượng ~2 tiếng)",
+                        title = "Lấy mẫu xét nghiệm, siêu âm / chụp chiếu",
+                        instruction = "Di chuyển đến phòng xét nghiệm và chẩn đoán hình ảnh theo chỉ dẫn của y tá, chờ kết quả.",
+                        priority = "Cao"
+                    ),
+                    AiRoadmapTaskStep(
+                        dayOffset = 0,
+                        scheduledTime = "10:30",
+                        phase = "Sự kiện chính: Khám bệnh (Thời lượng ~2 tiếng)",
+                        title = "Nghe bác sĩ kết luận chẩn đoán & Kê đơn thuốc",
+                        instruction = "Quay lại phòng khám ban đầu, nghe bác sĩ giải thích kết quả xét nghiệm, tư vấn hướng điều trị và nhận đơn thuốc.",
+                        priority = "Cao"
+                    ),
+                    AiRoadmapTaskStep(
+                        dayOffset = 0,
+                        scheduledTime = "11:00",
+                        phase = "Sau buổi khám",
+                        title = "Thanh toán viện phí & Lĩnh thuốc tại quầy dược",
+                        instruction = "Quyết toán viện phí BHYT, nhận thuốc và nghe dược sĩ hướng dẫn liều uống chi tiết. Ghi nhớ lịch hẹn tái khám.",
+                        priority = "Bình thường"
+                    )
+                )
+                val plan = AiRoadmapPlan(
+                    title = "Lịch trình Đi khám bệnh chuyên khoa (~2 tiếng)",
+                    category = "Sức khỏe",
+                    icon = "🏥",
+                    totalDays = 1,
+                    description = "Sự kiện ngắn có thời điểm cố định: Đi khám bệnh lúc 09:00 sáng, thời lượng dự kiến 2 tiếng bao gồm chuẩn bị, thăm khám và nhận thuốc.",
+                    tasks = tasks,
+                    planType = "SHORT_EVENT",
+                    eventDate = "Hôm nay / Ngày mai",
+                    eventTime = "09:00",
+                    eventDurationMinutes = 120
+                )
+                Pair("Tôi đã thiết lập Lịch trình Sự kiện Ngắn đi khám bác sĩ cho bạn:", plan)
+            }
+
             p.contains("ngô") || p.contains("bắp") -> {
                 val tasks = listOf(
                     AiRoadmapTaskStep(dayOffset = 0, scheduledTime = "07:30", phase = "Giai đoạn 1: Chuẩn bị & Gieo hạt", title = "Làm đất & Bón phân lót", instruction = "Cày bừa tơi xốp, bón lót phân chuồng hoai mục và NPK, lên luống rộng 1.2m, rãnh thoát nước tốt."),
@@ -1023,7 +1540,8 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                     icon = "🌽",
                     totalDays = 90,
                     description = "Lộ trình chi tiết từng mốc từ làm đất, gieo hạt, bón lót, tỉa dặm, bón thúc, phòng sâu bệnh đến khi bẻ bắp thu hoạch.",
-                    tasks = tasks
+                    tasks = tasks,
+                    planType = "MULTI_DAY"
                 )
                 Pair("Tôi đã thiết lập lộ trình 90 ngày chuẩn nông nghiệp cho vụ ngô của bạn:", plan)
             }
@@ -1046,7 +1564,8 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                     icon = "🛵",
                     totalDays = 30,
                     description = "Lộ trình xuyên suốt chiều dài đất nước qua các điểm đến biểu tượng từ Thủ đô Hà Nội qua Cố đô Huế, Hội An, Đà Lạt đến Cột mốc Đất Mũi Cà Mau.",
-                    tasks = tasks
+                    tasks = tasks,
+                    planType = "MULTI_DAY"
                 )
                 Pair("Tôi đã lên lịch trình chi tiết 30 ngày phượt Xuyên Việt từ Bắc vào Nam cho bạn:", plan)
             }
@@ -1066,7 +1585,8 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                     icon = "🌾",
                     totalDays = 100,
                     description = "Quy trình chăm sóc lúa từng giai đoạn từ ngâm giống, sạ mạ, đẻ nhánh, bón đón đòng đến gặt lúa vàng.",
-                    tasks = tasks
+                    tasks = tasks,
+                    planType = "MULTI_DAY"
                 )
                 Pair("Tôi đã thiết lập lộ trình canh tác lúa 100 ngày cho bạn:", plan)
             }
@@ -1085,12 +1605,12 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                     icon = "📚",
                     totalDays = 60,
                     description = "Phương pháp học từ vựng, phát âm IPA, ngữ pháp nền tảng đến phản xạ nói nhại và giao tiếp tự tin.",
-                    tasks = tasks
+                    tasks = tasks,
+                    planType = "MULTI_DAY"
                 )
                 Pair("Tôi đã thiết lập lộ trình học tập 60 ngày dành cho bạn:", plan)
             }
             else -> {
-                // Adaptive default roadmap for custom request
                 val tasks = listOf(
                     AiRoadmapTaskStep(dayOffset = 0, scheduledTime = "08:00", phase = "Chặng 1: Khởi động & Chuẩn bị", title = "Khởi đầu kế hoạch: $prompt", instruction = "Chuẩn bị nguồn lực, dụng cụ và tài liệu cần thiết để bắt đầu hành trình thuận lợi."),
                     AiRoadmapTaskStep(dayOffset = 5, scheduledTime = "08:30", phase = "Chặng 1: Khởi động & Chuẩn bị", title = "Thực hiện bước tiền đề & Đánh giá sơ bộ", instruction = "Tiến hành các bước cơ bản ban đầu, ghi chép lại kết quả để điều chỉnh kịp thời."),
@@ -1104,7 +1624,8 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                     icon = "✨",
                     totalDays = 30,
                     description = "Kế hoạch được tùy chỉnh từng mốc thời gian giúp bạn hoàn thành mục tiêu suôn sẻ.",
-                    tasks = tasks
+                    tasks = tasks,
+                    planType = "MULTI_DAY"
                 )
                 Pair("Tôi đã phác thảo lộ trình thực tế cho mục tiêu của bạn:", plan)
             }
@@ -1117,100 +1638,97 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
      */
     fun generateExternalRoadmapPrompt(
         topic: String,
-        startDate: String = "2026-10-21",
-        durationDays: Int = 30,
-        category: String = "Nông nghiệp"
+        startDate: String = "2026-10-29",
+        durationDays: Int = 90,
+        category: String = "Nông nghiệp",
+        planType: RoadmapPlanType = RoadmapPlanType.AUTO
     ): String {
-        val cleanTopic = topic.trim().ifBlank { "Lộ trình kế hoạch chi tiết đa tháng" }
+        val cleanTopic = topic.trim().ifBlank { "Lộ trình kế hoạch chi tiết" }
+        val analysis = analyzeRoadmapIntent(cleanTopic, durationDays, planType)
         val lower = cleanTopic.lowercase()
 
         val categoryEmoji = when {
-            category.contains("Nông nghiệp") || lower.contains("ngô") || lower.contains("lúa") || lower.contains("trồng") -> "🌱"
-            category.contains("Du lịch") || lower.contains("phượt") || lower.contains("du lịch") || lower.contains("tour") -> "✈️"
-            category.contains("Học tập") || lower.contains("học") || lower.contains("thi") || lower.contains("ielts") -> "📚"
-            category.contains("Sức khỏe") || lower.contains("chạy") || lower.contains("gym") || lower.contains("giảm cân") -> "🏃"
+            category.contains("Nông nghiệp") || lower.contains("ngô") || lower.contains("lúa") || lower.contains("cà chua") -> "🌱"
+            category.contains("Du lịch") || lower.contains("phượt") || lower.contains("bay") || lower.contains("chuyến bay") -> "✈️"
+            category.contains("Học tập") || lower.contains("học") || lower.contains("thi") || lower.contains("tiếng") -> "📚"
+            category.contains("Sức khỏe") || lower.contains("khám") || lower.contains("chạy") || lower.contains("gym") -> "🏥"
             else -> "🎯"
         }
 
-        val requirements = when {
-            lower.contains("ngô") || lower.contains("bắp") || (category.contains("Nông nghiệp") && (lower.contains("rau") || lower.contains("trồng") || lower.contains("lúa") || lower.contains("cây"))) -> """
-Các giai đoạn cần có trong lộ trình nông nghiệp/canh tác:
-- Giai đoạn 1: Chuẩn bị giống, xử lý đất và bón lót
-- Giai đoạn 2: Gieo hạt / cấy sạ / trồng cây con và tưới ẩm
-- Giai đoạn 3: Chăm sóc cây con, tỉa dặm và bón thúc đợt 1
-- Giai đoạn 4: Giai đoạn phát triển mạnh, vun xới, bón thúc đợt 2
-- Giai đoạn 5: Phòng trừ sâu bệnh sinh học, tưới nước nuôi hoa/bắp/đòng
-- Giai đoạn 6: Vào hạt, dưỡng quả và chuẩn bị thu hoạch
-- Giai đoạn 7: Thu hoạch đúng thời điểm và bảo quản sau thu hoạch
-            """.trimIndent()
-
-            lower.contains("du lịch") || lower.contains("phượt") || lower.contains("xuyên việt") || lower.contains("tour") -> """
-Các giai đoạn/chặng cần có trong lộ trình du lịch:
-- Phân chia các chặng/tỉnh thành theo hành trình địa lý hợp lý
-- Mỗi chặng nêu rõ các điểm tham quan biểu tượng, đặc sản địa phương, lưu trú
-- Có mốc ngày di chuyển và mốc ngày nghỉ dưỡng/trải nghiệm
-- Kết thúc bằng điểm đến trọn vẹn và tổng kết chuyến đi
-            """.trimIndent()
-
-            lower.contains("học") || lower.contains("thi") || lower.contains("ielts") || lower.contains("tiếng") -> """
-Các giai đoạn cần có trong lộ trình học tập/rèn luyện:
-- Chặng 1: Kiểm tra trình độ, củng cố kiến thức nền tảng và phương pháp
-- Chặng 2: Nâng cao chuyên sâu, thực hành giải đề/kỹ năng phản xạ
-- Chặng 3: Thi thử áp lực thời gian, khắc phục điểm yếu và về đích tự tin
-            """.trimIndent()
-
-            else -> """
-Các giai đoạn cần có trong kế hoạch đa tháng:
-- Chặng 1: Khởi động, chuẩn bị nguồn lực và triển khai bước đầu
-- Chặng 2: Đẩy mạnh các hoạt động cốt lõi và kiểm tra định kỳ
-- Chặng 3: Tăng tốc, hoàn thiện các hạng mục trọng điểm
-- Chặng 4: Tổng kết, đánh giá thành quả và bước tiếp theo
-            """.trimIndent()
+        val typeDescription = when (analysis.detectedType) {
+            RoadmapPlanType.SHORT_EVENT -> "SỰ KIỆN NGẮN CÓ THỜI ĐIỂM CỐ ĐỊNH (vài tiếng đến 1-2 ngày, ví dụ chuyến bay, khám bệnh, thi cử, phỏng vấn)"
+            RoadmapPlanType.TIME_BOUND -> "CÔNG VIỆC CÓ THỜI HẠN (vài ngày đến 2 tuần, ví dụ chuyển nhà, hoàn tất dự án)"
+            RoadmapPlanType.HYBRID -> "LỊCH TRÌNH HỖN HỢP (Thời gian chuẩn bị trước + Sự kiện chính + Thời gian theo dõi/ổn định sau sự kiện)"
+            RoadmapPlanType.MULTI_DAY -> "KẾ HOẠCH DÀI HẠN ĐA THÁNG (trồng trọt, canh tác, học ngoại ngữ, rèn luyện 30-100 ngày)"
+            RoadmapPlanType.AUTO -> "TỰ ĐỘNG PHÂN LOẠI THEO NỘI DUNG (Sự kiện ngắn, Có thời hạn, Đa tháng hoặc Hỗn hợp)"
         }
 
+        val eventDetailsBuilder = StringBuilder()
+        if (analysis.detectedEventDate != null) eventDetailsBuilder.append("- Ngày diễn ra sự kiện: ${analysis.detectedEventDate}\n")
+        if (analysis.detectedEventTime != null) eventDetailsBuilder.append("- Giờ sự kiện: ${analysis.detectedEventTime}\n")
+        if (analysis.detectedDurationHours != null) eventDetailsBuilder.append("- Thời lượng sự kiện: ${analysis.detectedDurationHours.toInt()} tiếng\n")
+        if (analysis.detectedOrigin != null) eventDetailsBuilder.append("- Nơi xuất phát: ${analysis.detectedOrigin}\n")
+        if (analysis.detectedDestination != null) eventDetailsBuilder.append("- Điểm đến: ${analysis.detectedDestination}\n")
+        if (analysis.detectedTimezone != null) eventDetailsBuilder.append("- Múi giờ: ${analysis.detectedTimezone}\n")
+        if (analysis.detectedPrepDays != null) eventDetailsBuilder.append("- Thời gian chuẩn bị trước sự kiện: ${analysis.detectedPrepDays} ngày\n")
+        if (analysis.detectedFollowUpDays != null) eventDetailsBuilder.append("- Thời gian theo dõi sau sự kiện: ${analysis.detectedFollowUpDays} ngày\n")
+
+        val eventDetailsStr = eventDetailsBuilder.toString().trim()
+
         return """
-Hãy đóng vai trò là một chuyên gia lập kế hoạch và lịch trình chi tiết. Hãy giúp tôi lập Lộ trình & Kế hoạch Đa tháng: "$cleanTopic".
+Hãy đóng vai trò là chuyên gia thiết kế lộ trình & kế hoạch AI hàng đầu. Hãy giúp tôi tạo một Lộ trình chuẩn xác cho yêu cầu sau:
 
-Thông tin cơ bản:
-- Ngày bắt đầu: $startDate
-- Tổng thời lượng dự kiến: $durationDays ngày
-- Phân loại: $category $categoryEmoji
+NỘI DUNG YÊU CẦU:
+"$cleanTopic"
 
-Yêu cầu chi tiết:
-$requirements
+THÔNG TIN ĐẦU VÀO:
+- Ngày bắt đầu kế hoạch: $startDate
+- Tổng số ngày người dùng đang chọn trên giao diện: $durationDays ngày
+- Phân loại lộ trình mong muốn: ${analysis.detectedType.displayName} ($typeDescription)
+- Danh mục: $category $categoryEmoji
+${if (eventDetailsStr.isNotBlank()) "THÔNG TIN SỰ KIỆN ĐÃ NHẬN DIỆN ĐƯỢC:\n$eventDetailsStr" else ""}
 
-Hãy phân bổ các công việc/nhiệm vụ trải đều theo các mốc ngày (dayOffset từ 0 đến ${durationDays - 1}, trong đó dayOffset = 0 là Ngày bắt đầu $startDate).
+QUY TẮC BẮT BUỘC KHI LẬP LỊCH TRÌNH:
+1. “Trước khi tạo lịch trình, hãy xác định người dùng đang yêu cầu một sự kiện ngắn, một công việc có thời hạn hay một kế hoạch dài hạn. Không được mặc định rằng thời lượng của sự kiện bằng số ngày trong trường totalDays. Nếu người dùng yêu cầu một chuyến bay kéo dài 4 tiếng, hãy lập lịch theo các mốc cần thiết quanh chuyến bay, không tạo công việc cho đủ 90 ngày chỉ vì trường số ngày đang đặt là 90. Chỉ tạo kế hoạch 90 ngày nếu người dùng thực sự yêu cầu thời gian chuẩn bị hoặc theo dõi 90 ngày.”
+2. Với SỰ KIỆN NGẮN (như chuyến bay, đi khám, thi cử): Tạo từ 5 đến 12 nhiệm vụ thực tế và hợp lý quanh sự kiện (chuẩn bị trước sự kiện, lúc diễn ra, và sau sự kiện). Đặt totalDays đúng với thực tế (1 đến 2 ngày). KHÔNG tạo việc lặp lại vô nghĩa để lấp đầy 90 ngày.
+3. Với LỊCH TRÌNH HỖN HỢP: Tách rõ 3 loại thời gian:
+   - Thời gian chuẩn bị trước sự kiện
+   - Thời lượng sự kiện diễn ra
+   - Thời gian theo dõi/ổn định sau sự kiện
+4. XỬ LÝ SỰ KIỆN QUA ĐÊM & MÚI GIỜ:
+   - Nếu sự kiện bắt đầu đêm (ví dụ 23:00) và kéo dài qua nửa đêm hôm sau (ví dụ hạ cánh lúc 02:00 - 04:00 sáng): các nhiệm vụ sau 00:00 PHẢI được gán dayOffset tăng thêm 1 (ngày hôm sau).
+   - Nếu có chênh lệch múi giờ (ví dụ Hàn Quốc KST UTC+9 sang Việt Nam ICT UTC+7), hãy ghi chú rõ múi giờ ở từng mốc.
+   - Không tự ý bịa đặt số hiệu chuyến bay, nhà ga hoặc thông tin đặt chỗ khi người dùng chưa cung cấp (ghi chú 'cần đối chiếu vé thật').
 
-Sau khi phân tích, BẮT BUỘC bạn phải trả về một khối JSON chuẩn duy nhất (đặt trong ```json ... ```) để tôi có thể sao chép và dán trực tiếp vào ứng dụng Android quản lý lịch trình:
+CẤU TRÚC JSON BẮT BUỘC TRẢ VỀ:
+BẮT BUỘC chỉ trả về duy nhất một khối JSON hợp lệ nằm trong cặp ```json ... ``` để tôi sao chép và dán trực tiếp vào ứng dụng Android:
 
 ```json
 {
   "title": "$cleanTopic",
   "category": "$category",
   "icon": "$categoryEmoji",
-  "totalDays": $durationDays,
-  "description": "Mô tả tổng quan, mục tiêu đạt được sau $durationDays ngày của lộ trình.",
+  "totalDays": ${if (analysis.isShortEvent) analysis.suggestedDurationDays else durationDays},
+  "planType": "${analysis.detectedType.code}",
+  ${if (analysis.detectedEventDate != null) "\"eventDate\": \"${analysis.detectedEventDate}\"," else ""}
+  ${if (analysis.detectedEventTime != null) "\"eventTime\": \"${analysis.detectedEventTime}\"," else ""}
+  ${if (analysis.detectedDurationHours != null) "\"eventDurationMinutes\": ${(analysis.detectedDurationHours * 60).toInt()}," else ""}
+  ${if (analysis.detectedTimezone != null) "\"timezone\": \"${analysis.detectedTimezone}\"," else ""}
+  "description": "Mô tả ngắn gọn mục tiêu và tổng quan các mốc chính của lộ trình.",
   "tasks": [
     {
       "dayOffset": 0,
-      "scheduledTime": "07:30",
-      "phase": "Giai đoạn 1: Chuẩn bị & Khởi động",
-      "title": "Tên công việc / hoạt động cụ thể",
-      "instruction": "Hướng dẫn chi tiết cách thực hiện, thông số kỹ thuật hoặc lưu ý an toàn",
+      "scheduledTime": "19:00",
+      "phase": "Giai đoạn 1: Chuẩn bị",
+      "title": "Tên nhiệm vụ cụ thể",
+      "instruction": "Hướng dẫn chi tiết, giấy tờ cần chuẩn bị hoặc lưu ý an toàn",
       "priority": "Cao",
-      "hasLoudAlarm": false
+      "hasLoudAlarm": true,
+      "timezone": "KST"
     }
   ]
 }
 ```
-
-Quy tắc bắt buộc:
-1. "dayOffset": Số ngày tính từ ngày bắt đầu (0 là ngày đầu tiên, 1 là ngày thứ hai...). Các công việc phải được sắp xếp theo "dayOffset" tăng dần (tối đa dayOffset <= ${durationDays - 1}).
-2. "scheduledTime": Giờ dự kiến thực hiện trong ngày, dạng 24h "HH:mm" (ví dụ: "07:30", "08:00", "14:00", "19:30").
-3. "phase": Tên giai đoạn hoặc chặng (ví dụ: "Giai đoạn 1: Làm đất", "Chặng 1: Miền Bắc", "Tháng 1: Nền tảng").
-4. "priority": Chỉ được dùng một trong 3 giá trị: "Cao", "Bình thường", "Thấp".
-5. "hasLoudAlarm": true nếu là công việc cực kỳ quan trọng cần chuông báo thức lớn để không bao giờ quên, ngược lại là false.
-6. Hãy tạo ít nhất 6 đến 15 mốc công việc chi tiết, thực tế, khoa học và khả thi để người dùng dễ dàng theo dõi.
         """.trimIndent()
     }
 
@@ -1244,12 +1762,19 @@ Quy tắc bắt buộc:
 
             val planJson = JSONObject(jsonString)
             val title = planJson.optString("title").ifBlank {
-                planJson.optString("roadmapTitle", "Lộ trình AI").ifBlank { "Lộ trình Kế hoạch Đa tháng" }
+                planJson.optString("roadmapTitle", "Lộ trình AI").ifBlank { "Lộ trình Kế hoạch" }
             }
-            val category = planJson.optString("category", "Nông nghiệp")
+            val category = planJson.optString("category", "Đời sống")
             val icon = planJson.optString("icon", "🌱")
             var totalDays = planJson.optInt("totalDays", 0)
             val description = planJson.optString("description", "")
+            val planType = planJson.optString("planType", "MULTI_DAY")
+            val eventDate = if (planJson.has("eventDate")) planJson.optString("eventDate") else null
+            val eventTime = if (planJson.has("eventTime")) planJson.optString("eventTime") else null
+            val durationMin = if (planJson.has("eventDurationMinutes")) planJson.optInt("eventDurationMinutes") else null
+            val timezone = if (planJson.has("timezone")) planJson.optString("timezone") else null
+            val prepDays = if (planJson.has("preparationDays")) planJson.optInt("preparationDays") else null
+            val followUpDays = if (planJson.has("followUpDays")) planJson.optInt("followUpDays") else null
 
             val tasksArray = planJson.optJSONArray("tasks")
                 ?: planJson.optJSONArray("steps")
@@ -1261,39 +1786,56 @@ Quy tắc bắt buộc:
 
             val tasksList = mutableListOf<AiRoadmapTaskStep>()
             var maxOffset = 0
+            var prevTimeMinutes = -1
+            var overnightDayAdded = 0
 
             for (i in 0 until tasksArray.length()) {
                 val tObj = tasksArray.optJSONObject(i) ?: continue
 
                 // Check dayOffset or day (if external AI used 1-based "day" or "dayNumber")
-                val dayOffset = when {
+                var dayOffset = when {
                     tObj.has("dayOffset") -> tObj.optInt("dayOffset", 0)
                     tObj.has("day") -> maxOf(0, tObj.optInt("day", 1) - 1)
                     tObj.has("dayNumber") -> maxOf(0, tObj.optInt("dayNumber", 1) - 1)
                     else -> i * 5
                 }
-                if (dayOffset > maxOffset) {
-                    maxOffset = dayOffset
-                }
 
                 val rawTime = tObj.optString("scheduledTime", "08:00").ifBlank {
                     tObj.optString("time", "08:00")
                 }
+                val normalizedTime = normalizeTime(rawTime)
                 val phase = tObj.optString("phase").ifBlank { "Giai đoạn ${i + 1}" }
                 val taskTitle = tObj.optString("title").ifBlank { "Công việc mốc ngày ${dayOffset + 1}" }
                 val instr = tObj.optString("instruction", "")
                 val priority = tObj.optString("priority", "Bình thường")
                 val hasLoudAlarm = tObj.optBoolean("hasLoudAlarm", false)
+                val tTimezone = if (tObj.has("timezone")) tObj.optString("timezone") else timezone
+
+                // Tự động xử lý nếu sự kiện kéo dài qua nửa đêm (ví dụ từ 23:00 chuyển sang 02:00) mà AI chưa tăng dayOffset
+                val parts = normalizedTime.split(":")
+                val curMinutes = (parts.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (parts.getOrNull(1)?.toIntOrNull() ?: 0)
+                if (prevTimeMinutes >= 20 * 60 && curMinutes <= 6 * 60 && dayOffset == 0 && overnightDayAdded == 0) {
+                    overnightDayAdded = 1
+                }
+                if (overnightDayAdded > 0 && dayOffset == 0) {
+                    dayOffset += overnightDayAdded
+                }
+                prevTimeMinutes = curMinutes
+
+                if (dayOffset > maxOffset) {
+                    maxOffset = dayOffset
+                }
 
                 tasksList.add(
                     AiRoadmapTaskStep(
                         dayOffset = dayOffset,
-                        scheduledTime = normalizeTime(rawTime),
+                        scheduledTime = normalizedTime,
                         phase = phase,
                         title = taskTitle,
                         instruction = instr,
                         priority = priority,
-                        hasLoudAlarm = hasLoudAlarm
+                        hasLoudAlarm = hasLoudAlarm,
+                        timezone = tTimezone
                     )
                 )
             }
@@ -1305,7 +1847,11 @@ Quy tắc bắt buộc:
             // Sắp xếp các tasks theo thứ tự dayOffset tăng dần
             tasksList.sortBy { it.dayOffset }
 
-            if (totalDays <= 0) {
+            // Chuẩn hóa totalDays nếu là sự kiện ngắn hoặc external AI đặt 90 ngày cho 1-2 ngày sự kiện
+            val isShortOrEvent = planType == "SHORT_EVENT" || (maxOffset <= 1 && totalDays >= 30)
+            if (isShortOrEvent) {
+                totalDays = maxOffset + 1
+            } else if (totalDays <= 0) {
                 totalDays = maxOffset + 1
             }
 
@@ -1315,7 +1861,14 @@ Quy tắc bắt buộc:
                 icon = icon.ifBlank { "🌱" },
                 totalDays = totalDays,
                 description = description,
-                tasks = tasksList
+                tasks = tasksList,
+                planType = planType,
+                eventDate = eventDate,
+                eventTime = eventTime,
+                eventDurationMinutes = durationMin,
+                timezone = timezone,
+                preparationDays = prepDays,
+                followUpDays = followUpDays
             )
             return Pair(plan, null)
 
@@ -1325,3 +1878,4 @@ Quy tắc bắt buộc:
         }
     }
 }
+

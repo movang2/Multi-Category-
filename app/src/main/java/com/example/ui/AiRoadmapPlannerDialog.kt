@@ -40,6 +40,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import com.example.ai.AiRoadmapPlan
 import com.example.ai.AiRoadmapTaskStep
+import com.example.ai.RoadmapPlanType
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -69,6 +70,7 @@ fun AiRoadmapPlannerDialog(
     var externalRoadmapTopic by remember { mutableStateOf("Canh tác ngô lai 90 ngày") }
     var externalRoadmapDays by remember { mutableStateOf("90") }
     var externalRoadmapCategory by remember { mutableStateOf("Nông nghiệp") }
+    var externalPlanType by remember { mutableStateOf(RoadmapPlanType.AUTO) }
     var externalGeneratedPrompt by remember { mutableStateOf("") }
 
     // Automatically send initial prompt if passed from preset
@@ -545,6 +547,8 @@ fun AiRoadmapPlannerDialog(
                         onDurationDaysChange = { externalRoadmapDays = it },
                         categoryInput = externalRoadmapCategory,
                         onCategoryChange = { externalRoadmapCategory = it },
+                        planTypeInput = externalPlanType,
+                        onPlanTypeChange = { externalPlanType = it },
                         generatedPrompt = externalGeneratedPrompt,
                         onGeneratedPromptChange = { externalGeneratedPrompt = it },
                         onImportSuccess = {
@@ -612,11 +616,53 @@ fun RoadmapPlanPreviewCard(
                             )
                         }
                         Spacer(modifier = Modifier.width(6.dp))
+                        val typeBadgeText = when (plan.planType) {
+                            "SHORT_EVENT" -> "⚡ Sự kiện ngắn"
+                            "TIME_BOUND" -> "⏱️ Có thời hạn"
+                            "HYBRID" -> "🔀 Hỗn hợp"
+                            else -> "📅 Đa tháng"
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFF1E3A8A).copy(alpha = 0.5f)
+                        ) {
+                            Text(
+                                text = typeBadgeText,
+                                color = Color(0xFF93C5FD),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "• ${plan.totalDays} ngày (${plan.tasks.size} công việc)",
+                            text = "• ${plan.totalDays} ngày (${plan.tasks.size} việc)",
                             color = Color(0xFF9CA3AF),
                             fontSize = 11.sp
                         )
+                    }
+                    if (plan.eventDate != null || plan.timezone != null) {
+                        Row(
+                            modifier = Modifier.padding(top = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (plan.eventDate != null) {
+                                Text(
+                                    text = "⏰ Sự kiện: ${plan.eventDate} ${plan.eventTime ?: ""}",
+                                    color = Color(0xFFFCD34D),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            if (plan.timezone != null) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "• 🌏 ${plan.timezone}",
+                                    color = Color(0xFF67E8F9),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -738,12 +784,29 @@ fun PlanStepRow(
             Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = step.title,
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = step.title,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (!step.timezone.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFF0F766E).copy(alpha = 0.5f)
+                        ) {
+                            Text(
+                                text = step.timezone ?: "",
+                                color = Color(0xFF5EEAD4),
+                                fontSize = 9.sp,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
                 if (step.phase.isNotBlank()) {
                     Text(
                         text = step.phase,
@@ -784,6 +847,8 @@ fun ExternalAiRoadmapPromptAndImportView(
     onDurationDaysChange: (String) -> Unit,
     categoryInput: String,
     onCategoryChange: (String) -> Unit,
+    planTypeInput: RoadmapPlanType = RoadmapPlanType.AUTO,
+    onPlanTypeChange: (RoadmapPlanType) -> Unit = {},
     generatedPrompt: String,
     onGeneratedPromptChange: (String) -> Unit,
     onImportSuccess: () -> Unit
@@ -792,6 +857,11 @@ fun ExternalAiRoadmapPromptAndImportView(
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+
+    // Phân tích ý định & phát hiện xung đột thời lượng
+    val intentAnalysis = remember(topicInput, durationDaysInput, planTypeInput) {
+        viewModel.analyzeRoadmapIntent(topicInput, durationDaysInput.toIntOrNull() ?: 90, planTypeInput)
+    }
 
     Column(
         modifier = Modifier
@@ -808,11 +878,12 @@ fun ExternalAiRoadmapPromptAndImportView(
         ) {
             val suggestions = listOf(
                 Triple("🌽 Canh tác ngô lai 90 ngày", "90", "Nông nghiệp"),
-                Triple("🛵 Phượt Xuyên Việt 30 ngày", "30", "Du lịch"),
-                Triple("🌾 Lúa nước năng suất cao 100 ngày", "100", "Nông nghiệp"),
-                Triple("📚 Ôn thi IELTS 6.5 90 ngày", "90", "Học tập"),
-                Triple("🏃 Luyện chạy Half-Marathon 60 ngày", "60", "Sức khỏe"),
-                Triple("🍎 Trồng rau sạch sân thượng 45 ngày", "45", "Nông nghiệp")
+                Triple("✈️ Chuyến bay Busan về VN (4h)", "2", "Du lịch"),
+                Triple("🔀 Chuẩn bị về nước 60 ngày + Bay 4h", "65", "Du lịch"),
+                Triple("🍅 Trồng cà chua hữu cơ 100 ngày", "100", "Nông nghiệp"),
+                Triple("🇰🇷 Học tiếng Hàn sơ cấp 90 ngày", "90", "Học tập"),
+                Triple("🏥 Đi khám bệnh (2 tiếng)", "1", "Sức khỏe"),
+                Triple("🛵 Phượt Xuyên Việt 30 ngày", "30", "Du lịch")
             )
             items(suggestions) { (title, days, cat) ->
                 Surface(
@@ -823,12 +894,19 @@ fun ExternalAiRoadmapPromptAndImportView(
                         onTopicChange(title)
                         onDurationDaysChange(days)
                         onCategoryChange(cat)
+                        val pType = when {
+                            title.contains("Chuyến bay") || title.contains("khám") -> RoadmapPlanType.SHORT_EVENT
+                            title.contains("Chuẩn bị về nước") -> RoadmapPlanType.HYBRID
+                            else -> RoadmapPlanType.MULTI_DAY
+                        }
+                        onPlanTypeChange(pType)
                         onGeneratedPromptChange(
                             viewModel.generateExternalRoadmapPrompt(
                                 topic = title,
                                 startDate = startDateStr,
                                 durationDays = days.toIntOrNull() ?: 30,
-                                category = cat
+                                category = cat,
+                                planType = pType
                             )
                         )
                     }
@@ -889,7 +967,7 @@ fun ExternalAiRoadmapPromptAndImportView(
                     value = topicInput,
                     onValueChange = onTopicChange,
                     label = { Text("Mục tiêu / Nhu cầu lộ trình", fontSize = 12.sp) },
-                    placeholder = { Text("Ví dụ: Canh tác ngô lai 90 ngày, Phượt xuyên Việt...", fontSize = 12.sp) },
+                    placeholder = { Text("Ví dụ: Chuyến bay Busan về VN lúc 23:00, Trồng cà chua 100 ngày...", fontSize = 12.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -903,6 +981,163 @@ fun ExternalAiRoadmapPromptAndImportView(
                         unfocusedLabelColor = Color(0xFF9CA3AF)
                     )
                 )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // --- ROADMAP PLAN TYPE SELECTOR ---
+                Text(
+                    text = "Loại lịch trình:",
+                    fontSize = 11.sp,
+                    color = Color(0xFF9CA3AF)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(RoadmapPlanType.values()) { type ->
+                        val isSelected = planTypeInput == type
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) Color(0xFF065F46) else Color(0xFF1F2937),
+                            border = BorderStroke(1.dp, if (isSelected) Color(0xFF10B981) else Color(0xFF374151)),
+                            modifier = Modifier.clickable { onPlanTypeChange(type) }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(type.icon, fontSize = 11.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = type.displayName,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) Color(0xFF6EE7B7) else Color(0xFFD1D5DB)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // --- SMART CONFLICT ALERT CARD ---
+                if (intentAnalysis.isShortEventConflictWith90Days) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF451A03).copy(alpha = 0.9f),
+                        border = BorderStroke(1.dp, Color(0xFFF59E0B)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.WarningAmber,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFBBF24),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Phát hiện sự kiện ngắn trong kế hoạch 90 ngày",
+                                    color = Color(0xFFFDE68A),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Yêu cầu này có vẻ là một sự kiện ngắn (${if (intentAnalysis.detectedDurationHours != null) "${intentAnalysis.detectedDurationHours.toInt()} tiếng" else "vài tiếng/1-2 ngày"}), nhưng bạn đang chọn kế hoạch $durationDaysInput ngày. Bạn muốn tạo lịch trình sự kiện hay giữ kế hoạch chuẩn bị 90 ngày?",
+                                color = Color(0xFFFEF3C7),
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            // 4 Choice Options
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFFD97706),
+                                        modifier = Modifier.clickable {
+                                            onPlanTypeChange(RoadmapPlanType.SHORT_EVENT)
+                                            val days = if (intentAnalysis.suggestedDurationDays > 0) intentAnalysis.suggestedDurationDays.toString() else "2"
+                                            onDurationDaysChange(days)
+                                            Toast.makeText(context, "Đã chuyển sang: Chỉ lịch trình sự kiện ($days ngày)", Toast.LENGTH_SHORT).show()
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "⚡ Chỉ lịch trình sự kiện",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFF047857),
+                                        modifier = Modifier.clickable {
+                                            onPlanTypeChange(RoadmapPlanType.HYBRID)
+                                            val prep = intentAnalysis.detectedPrepDays ?: 60
+                                            val fol = intentAnalysis.detectedFollowUpDays ?: 3
+                                            val total = (prep + fol + 2).toString()
+                                            onDurationDaysChange(total)
+                                            Toast.makeText(context, "Đã chọn: Chuẩn bị $prep ngày + Sự kiện + Hậu sự kiện $fol ngày ($total ngày)", Toast.LENGTH_SHORT).show()
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "🔀 Chuẩn bị + Sự kiện + Sau sự kiện",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFF374151),
+                                        border = BorderStroke(1.dp, Color(0xFF6B7280)),
+                                        modifier = Modifier.clickable {
+                                            onPlanTypeChange(RoadmapPlanType.MULTI_DAY)
+                                            Toast.makeText(context, "Giữ kế hoạch chuẩn bị đa tháng 90 ngày", Toast.LENGTH_SHORT).show()
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "📅 Giữ kế hoạch 90 ngày",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFF1F2937),
+                                        border = BorderStroke(1.dp, Color(0xFF4B5563)),
+                                        modifier = Modifier.clickable {
+                                            Toast.makeText(context, "Bạn có thể chỉnh trực tiếp ô 'Số ngày' bên dưới", Toast.LENGTH_SHORT).show()
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "✏️ Tự chỉnh thời gian",
+                                            color = Color(0xFFD1D5DB),
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -1022,7 +1257,8 @@ fun ExternalAiRoadmapPromptAndImportView(
                                 topic = topicInput,
                                 startDate = startDateStr,
                                 durationDays = days,
-                                category = categoryInput
+                                category = categoryInput,
+                                planType = planTypeInput
                             )
                             onGeneratedPromptChange(prompt)
                         },
