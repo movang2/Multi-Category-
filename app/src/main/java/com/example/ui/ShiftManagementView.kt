@@ -37,6 +37,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.ShiftStation
 import com.example.data.ShiftTask
+import kotlinx.coroutines.delay
+import kotlin.math.abs
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -94,6 +96,72 @@ fun ShiftManagementView(
     var showRotationDialog by remember { mutableStateOf(false) }
     var showRescheduleDialog by remember { mutableStateOf(false) }
     var showStartShiftAlignDialog by remember { mutableStateOf(false) }
+
+    // Tự động chọn ca làm việc đang được bắt đầu (nếu có) khi người dùng mở màn hình
+    LaunchedEffect(startedStationIds, stations) {
+        if (startedStationIds.isNotEmpty()) {
+            val currentId = selectedStation?.id
+            if (currentId == null || !startedStationIds.contains(currentId)) {
+                val activeStation = stations.firstOrNull { startedStationIds.contains(it.id) }
+                if (activeStation != null) {
+                    viewModel.selectStation(activeStation.id)
+                }
+            }
+        }
+    }
+
+    // Cập nhật phút hiện tại theo thời gian thực (mỗi 15 giây) để tính khoảng cách giờ chính xác
+    var currentTimeMinutes by remember {
+        val cal = Calendar.getInstance()
+        mutableStateOf(cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE))
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val cal = Calendar.getInstance()
+            currentTimeMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+            delay(15_000L)
+        }
+    }
+
+    // Chế độ ưu tiên công việc gần giờ hiện tại lên đầu (mặc định Bật)
+    var prioritizeNearCurrentTime by remember { mutableStateOf(true) }
+
+    // Sắp xếp ca làm: đưa ca đang bắt đầu (chạy) lên đầu danh sách tab
+    val sortedStations = remember(stations, startedStationIds) {
+        stations.sortedByDescending { startedStationIds.contains(it.id) }
+    }
+
+    // Hàm tính chênh lệch phút vòng xoay 24h giữa giờ tác vụ và giờ hiện tại
+    fun getMinutesDiff(timeScheduled: String, nowMinutes: Int): Int {
+        val parts = timeScheduled.split(":")
+        if (parts.size != 2) return 0
+        val h = parts[0].trim().toIntOrNull() ?: 0
+        val m = parts[1].trim().toIntOrNull() ?: 0
+        val taskMins = h * 60 + m
+        var diff = taskMins - nowMinutes
+        if (diff < -720) diff += 1440
+        if (diff > 720) diff -= 1440
+        return diff
+    }
+
+    val taskDiffMap = remember(tasks, currentTimeMinutes) {
+        tasks.associate { it.id to getMinutesDiff(it.timeScheduled, currentTimeMinutes) }
+    }
+
+    // Tác vụ tiếp theo sắp diễn ra (không bị ẩn, diff >= -3 với diff nhỏ nhất; hoặc tác vụ gần nhất)
+    val upcomingCandidates = tasks.filter { !it.isHidden && (taskDiffMap[it.id] ?: 0) >= -3 }
+    val nextUpcomingTaskId = upcomingCandidates.minByOrNull { taskDiffMap[it.id] ?: Int.MAX_VALUE }?.id
+        ?: tasks.filter { !it.isHidden }.minByOrNull { abs(taskDiffMap[it.id] ?: 0) }?.id
+
+    // Phân tách việc sắp tới và việc đã qua giờ
+    val upcomingTasks = remember(tasks, taskDiffMap) {
+        tasks.filter { (taskDiffMap[it.id] ?: 0) >= -3 }
+            .sortedBy { taskDiffMap[it.id] ?: 0 }
+    }
+    val pastTasks = remember(tasks, taskDiffMap) {
+        tasks.filter { (taskDiffMap[it.id] ?: 0) < -3 }
+            .sortedBy { taskDiffMap[it.id] ?: 0 }
+    }
 
     Column(
         modifier = Modifier
@@ -212,19 +280,24 @@ fun ShiftManagementView(
                 }
             }
 
-            // Bên dưới là các tab: ✓ 🏭 ca ngày    🏭 ca đêm    🏭 ngày nghỉ
+            // Bên dưới là các tab: ca đang bắt đầu được xếp đầu tiên với viền lửa nổi bật
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(stations) { station ->
+                items(sortedStations, key = { it.id }) { station ->
                     val isSelected = station.id == selectedStation?.id
                     val isStationStarted = startedStationIds.contains(station.id)
 
                     Surface(
                         shape = RoundedCornerShape(13.dp),
                         color = if (isSelected) ShiftBlue else DarkCard,
-                        border = if (isSelected) null else BorderStroke(1.dp, DarkBorder),
+                        border = when {
+                            isSelected && isStationStarted -> BorderStroke(1.5.dp, Color(0xFFF97316))
+                            isSelected -> null
+                            isStationStarted -> BorderStroke(1.5.dp, Color(0xFFF97316))
+                            else -> BorderStroke(1.dp, DarkBorder)
+                        },
                         contentColor = if (isSelected) Color.White else TextSecondary,
                         modifier = Modifier
                             .clickable {
@@ -249,12 +322,39 @@ fun ShiftManagementView(
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
                             }
+                            if (isStationStarted) {
+                                Text(
+                                    text = "🔥",
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(end = 4.dp)
+                                )
+                            }
                             Text(
-                                text = "${if (isStationStarted) "🔥 " else ""}${station.icon} ${station.name}",
+                                text = "${station.icon} ${station.name}",
                                 fontSize = 13.sp,
                                 fontWeight = if (isSelected || isStationStarted) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) Color.White else TextSecondary
+                                color = when {
+                                    isSelected -> Color.White
+                                    isStationStarted -> Color(0xFFFDBA74)
+                                    else -> TextSecondary
+                                }
                             )
+                            if (isStationStarted && !isSelected) {
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color(0xFFC2410C),
+                                    modifier = Modifier.padding(start = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "ĐANG CHẠY",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                             if (isSelected) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Icon(
@@ -573,16 +673,50 @@ fun ShiftManagementView(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val timeSpan = if (tasks.size >= 2) " (${tasks.first().timeScheduled} → ${tasks.last().timeScheduled})" else ""
-                            Text(
-                                text = "Lịch trình ${tasks.size} bước$timeSpan",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = TextSecondary,
-                                modifier = Modifier.weight(1f, fill = false),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f, fill = false)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (prioritizeNearCurrentTime) Color(0xFF78350F).copy(alpha = 0.5f) else DarkSubCard,
+                                    border = BorderStroke(1.dp, if (prioritizeNearCurrentTime) Color(0xFFF59E0B) else DarkBorder),
+                                    modifier = Modifier.clickable {
+                                        prioritizeNearCurrentTime = !prioritizeNearCurrentTime
+                                    }
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (prioritizeNearCurrentTime) Icons.Default.Bolt else Icons.Default.Schedule,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = if (prioritizeNearCurrentTime) Color(0xFFFDE68A) else TextSecondary
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = if (prioritizeNearCurrentTime) "⚡ Gần giờ nhất" else "⏱️ Thứ tự ca",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (prioritizeNearCurrentTime) Color(0xFFFDE68A) else TextSecondary
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                val timeSpan = if (tasks.size >= 2) " (${tasks.first().timeScheduled} → ${tasks.last().timeScheduled})" else ""
+                                Text(
+                                    text = if (prioritizeNearCurrentTime) "${upcomingTasks.size}/${tasks.size} việc" else "${tasks.size} bước$timeSpan",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
 
                             Spacer(modifier = Modifier.width(8.dp))
 
@@ -635,7 +769,7 @@ fun ShiftManagementView(
                                     modifier = Modifier
                                         .clickable { showRescheduleDialog = true }
                                         .testTag("bar_reschedule_button")
-                                ) {
+                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -680,25 +814,114 @@ fun ShiftManagementView(
                         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 96.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(tasks, key = { it.id }) { task ->
-                            ShiftTaskItemRow(
-                                task = task,
-                                onToggleHidden = {
-                                    viewModel.toggleTaskHidden(context, task)
-                                    Toast.makeText(
-                                        context,
-                                        if (!task.isHidden) "Đã ẩn: Công việc này sẽ không phát thông báo!"
-                                        else "Đã hiện: Sẽ phát thông báo khi bắt đầu ca!",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                },
-                                onDelete = { viewModel.deleteShiftTask(context, task) },
-                                onEdit = {
-                                    taskToEdit = task
-                                    showAddTaskDialog = true
-                                },
-                                onToggleLoudAlarm = { viewModel.toggleTaskLoudAlarm(task, context) }
-                            )
+                        if (prioritizeNearCurrentTime) {
+                            items(upcomingTasks, key = { it.id }) { task ->
+                                val diff = taskDiffMap[task.id] ?: 0
+                                ShiftTaskItemRow(
+                                    task = task,
+                                    isUpcomingNext = (task.id == nextUpcomingTaskId),
+                                    isPast = false,
+                                    diffMinutes = diff,
+                                    onToggleHidden = {
+                                        viewModel.toggleTaskHidden(context, task)
+                                        Toast.makeText(
+                                            context,
+                                            if (!task.isHidden) "Đã ẩn: Công việc này sẽ không phát thông báo!"
+                                            else "Đã hiện: Sẽ phát thông báo khi bắt đầu ca!",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    onDelete = { viewModel.deleteShiftTask(context, task) },
+                                    onEdit = {
+                                        taskToEdit = task
+                                        showAddTaskDialog = true
+                                    },
+                                    onToggleLoudAlarm = { viewModel.toggleTaskLoudAlarm(task, context) }
+                                )
+                            }
+
+                            if (pastTasks.isNotEmpty()) {
+                                item(key = "past_tasks_divider") {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = DarkSubCard.copy(alpha = 0.5f),
+                                        border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.4f)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.History,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(13.dp),
+                                                tint = TextSecondary
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "⌛ ĐÃ QUA GIỜ (${pastTasks.size} việc)",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = TextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                items(pastTasks, key = { it.id }) { task ->
+                                    val diff = taskDiffMap[task.id] ?: 0
+                                    ShiftTaskItemRow(
+                                        task = task,
+                                        isUpcomingNext = false,
+                                        isPast = true,
+                                        diffMinutes = diff,
+                                        onToggleHidden = {
+                                            viewModel.toggleTaskHidden(context, task)
+                                            Toast.makeText(
+                                                context,
+                                                if (!task.isHidden) "Đã ẩn: Công việc này sẽ không phát thông báo!"
+                                                else "Đã hiện: Sẽ phát thông báo khi bắt đầu ca!",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        },
+                                        onDelete = { viewModel.deleteShiftTask(context, task) },
+                                        onEdit = {
+                                            taskToEdit = task
+                                            showAddTaskDialog = true
+                                        },
+                                        onToggleLoudAlarm = { viewModel.toggleTaskLoudAlarm(task, context) }
+                                    )
+                                }
+                            }
+                        } else {
+                            items(tasks, key = { it.id }) { task ->
+                                val diff = taskDiffMap[task.id] ?: 0
+                                val isPast = diff < -3
+                                ShiftTaskItemRow(
+                                    task = task,
+                                    isUpcomingNext = (task.id == nextUpcomingTaskId),
+                                    isPast = isPast,
+                                    diffMinutes = diff,
+                                    onToggleHidden = {
+                                        viewModel.toggleTaskHidden(context, task)
+                                        Toast.makeText(
+                                            context,
+                                            if (!task.isHidden) "Đã ẩn: Công việc này sẽ không phát thông báo!"
+                                            else "Đã hiện: Sẽ phát thông báo khi bắt đầu ca!",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    onDelete = { viewModel.deleteShiftTask(context, task) },
+                                    onEdit = {
+                                        taskToEdit = task
+                                        showAddTaskDialog = true
+                                    },
+                                    onToggleLoudAlarm = { viewModel.toggleTaskLoudAlarm(task, context) }
+                                )
+                            }
                         }
                     }
                 }
@@ -929,6 +1152,9 @@ fun ShiftManagementView(
 @Composable
 fun ShiftTaskItemRow(
     task: ShiftTask,
+    isUpcomingNext: Boolean = false,
+    isPast: Boolean = false,
+    diffMinutes: Int = 0,
     onToggleHidden: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
@@ -940,12 +1166,21 @@ fun ShiftTaskItemRow(
             .clickable(onClick = onEdit),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (task.isHidden) DarkCard.copy(alpha = 0.6f) else DarkCard
+            containerColor = when {
+                isUpcomingNext -> Color(0xFF1E2638)
+                isPast -> DarkCard.copy(alpha = 0.55f)
+                task.isHidden -> DarkCard.copy(alpha = 0.6f)
+                else -> DarkCard
+            }
         ),
         border = BorderStroke(
-            1.dp,
-            if (!task.isHidden && task.priority == "Cao") Color(0xFFEF4444).copy(alpha = 0.5f)
-            else DarkBorder
+            width = if (isUpcomingNext) 2.dp else 1.dp,
+            color = when {
+                isUpcomingNext -> Color(0xFFF59E0B)
+                !task.isHidden && task.priority == "Cao" -> Color(0xFFEF4444).copy(alpha = 0.5f)
+                isPast -> DarkBorder.copy(alpha = 0.4f)
+                else -> DarkBorder
+            }
         )
     ) {
         Column(
@@ -953,14 +1188,60 @@ fun ShiftTaskItemRow(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            // Hàng 1: Giờ trong badge xanh + Tên công việc + Icon sửa/xóa tách biệt góc phải
+            // Banner nổi bật cho công việc sắp diễn ra tiếp theo (Gần mốc giờ hiện tại nhất)
+            if (isUpcomingNext) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFF59E0B).copy(alpha = 0.18f),
+                    border = BorderStroke(1.dp, Color(0xFFF59E0B)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Bolt,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                            tint = Color(0xFFF59E0B)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        val label = when {
+                            diffMinutes in -3..1 -> "🔔 ĐANG DIỄN RA (Đến giờ thực hiện)"
+                            diffMinutes > 1 && diffMinutes < 60 -> "⚡ SẮP TỚI • Còn khoảng $diffMinutes phút"
+                            diffMinutes >= 60 -> {
+                                val hrs = diffMinutes / 60
+                                val mins = diffMinutes % 60
+                                "⚡ SẮP TỚI • Còn khoảng ${hrs}h${if (mins > 0) "${mins}p" else ""}"
+                            }
+                            else -> "⚡ SẮP TỚI"
+                        }
+                        Text(
+                            text = label,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFDE68A)
+                        )
+                    }
+                }
+            }
+
+            // Hàng 1: Giờ trong badge + Tên công việc + Icon sửa/xóa tách biệt góc phải
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Giờ nằm trong một badge màu xanh
+                // Giờ nằm trong một badge màu xanh hoặc vàng hổ phách nổi bật
                 Surface(
-                    color = if (task.isHidden) DarkSubCard else ShiftBlue,
+                    color = when {
+                        task.isHidden -> DarkSubCard
+                        isUpcomingNext -> Color(0xFFF59E0B)
+                        isPast -> DarkSubCard
+                        else -> ShiftBlue
+                    },
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
@@ -968,7 +1249,12 @@ fun ShiftTaskItemRow(
                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
-                        color = if (task.isHidden) TextSecondary else Color.White
+                        color = when {
+                            task.isHidden -> TextSecondary
+                            isUpcomingNext -> Color(0xFF17181B)
+                            isPast -> TextSecondary
+                            else -> Color.White
+                        }
                     )
                 }
 
@@ -977,9 +1263,14 @@ fun ShiftTaskItemRow(
                 // Tên công việc lớn, dễ đọc, tự xuống dòng nếu dài
                 Text(
                     text = task.title,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = if (isUpcomingNext) FontWeight.ExtraBold else FontWeight.Bold,
                     fontSize = 15.sp,
-                    color = if (task.isHidden) TextSecondary else TextPrimary,
+                    color = when {
+                        task.isHidden -> TextSecondary
+                        isUpcomingNext -> Color(0xFFFDE68A)
+                        isPast -> TextSecondary.copy(alpha = 0.8f)
+                        else -> TextPrimary
+                    },
                     modifier = Modifier.weight(1f)
                 )
 
@@ -1010,7 +1301,7 @@ fun ShiftTaskItemRow(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Hàng 2: Priority nằm dưới tên, Trạng thái Ẩn/Hiện, Chuông nằm bên phải
+            // Hàng 2: Priority nằm dưới tên, Trạng thái Ẩn/Hiện/Đã qua, Chuông nằm bên phải
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1061,6 +1352,22 @@ fun ShiftTaskItemRow(
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = TextSecondary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    if (isPast && !task.isHidden) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = DarkSubCard.copy(alpha = 0.6f),
+                            border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = "⌛ Đã qua giờ",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = TextSecondary.copy(alpha = 0.75f),
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                             )
                         }

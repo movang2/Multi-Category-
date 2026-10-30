@@ -15,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -32,6 +34,10 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -144,6 +150,28 @@ fun MainScreen(
 
     var fullScreenImageUri: String? by remember { mutableStateOf(null) }
 
+    // --- Quyền tự động hóa ca làm (Tự mở app & Khóa máy đi ngủ khi mở app) ---
+    var canDrawOverlays by remember { mutableStateOf(viewModel.canDrawOverlays(context)) }
+    var isAdminActive by remember { mutableStateOf(viewModel.isDeviceAdminActive(context)) }
+    var userDismissedStartupDialog by rememberSaveable { mutableStateOf(false) }
+    var showStartupAutomationPermissionsDialog by rememberSaveable {
+        mutableStateOf(!viewModel.canDrawOverlays(context) || !viewModel.isDeviceAdminActive(context))
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                canDrawOverlays = viewModel.canDrawOverlays(context)
+                isAdminActive = viewModel.isDeviceAdminActive(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     // --- ZIP Backup Import Picker ---
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -242,6 +270,7 @@ fun MainScreen(
                             selected = currentTab == "shift_manager",
                             onClick = {
                                 currentTab = "shift_manager"
+                                viewModel.selectStartedStationIfAvailable()
                                 scope.launch { drawerState.close() }
                             },
                             modifier = Modifier
@@ -262,6 +291,35 @@ fun MainScreen(
                             modifier = Modifier
                                 .padding(vertical = 4.dp)
                                 .testTag("quick_notes_drawer_nav")
+                        )
+                    }
+
+                    item {
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.Default.Security, contentDescription = "Quyền tự động hóa", tint = Color(0xFF38BDF8)) },
+                            label = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Quyền tự động hóa", fontWeight = FontWeight.SemiBold)
+                                    if (canDrawOverlays && isAdminActive) {
+                                        Text("✓ Đủ quyền", fontSize = 10.sp, color = Color(0xFF34D399), fontWeight = FontWeight.Bold)
+                                    } else {
+                                        Text("⚠️ Cần cấp", fontSize = 10.sp, color = Color(0xFFFBBF24), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            },
+                            selected = false,
+                            onClick = {
+                                userDismissedStartupDialog = false
+                                showStartupAutomationPermissionsDialog = true
+                                scope.launch { drawerState.close() }
+                            },
+                            modifier = Modifier
+                                .padding(vertical = 4.dp)
+                                .testTag("automation_permissions_drawer_nav")
                         )
                     }
 
@@ -528,7 +586,10 @@ fun MainScreen(
                     )
                     NavigationBarItem(
                         selected = currentTab == "shift_manager",
-                        onClick = { currentTab = "shift_manager" },
+                        onClick = { 
+                            currentTab = "shift_manager"
+                            viewModel.selectStartedStationIfAvailable()
+                        },
                         icon = { Icon(Icons.Default.Engineering, contentDescription = "Ca làm việc") },
                         label = { Text("Ca làm") },
                         colors = NavigationBarItemDefaults.colors(
@@ -986,6 +1047,331 @@ fun MainScreen(
                         .background(Color.DarkGray.copy(alpha = 0.5f), RoundedCornerShape(50))
                 ) {
                     Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                }
+            }
+        }
+    }
+
+    // 5. DIALOG YÊU CẦU CẤP QUYỀN TỰ ĐỘNG HÓA KHI MỞ APP (MỞ APP VÀ KHÓA MÁY ĐI NGỦ)
+    if (showStartupAutomationPermissionsDialog && !userDismissedStartupDialog) {
+        AutomationPermissionsStartupDialog(
+            canDrawOverlays = canDrawOverlays,
+            isAdminActive = isAdminActive,
+            onGrantOverlay = {
+                try {
+                    context.startActivity(viewModel.getOverlayPermissionIntent(context))
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Không thể mở cài đặt hiển thị trên ứng dụng khác", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onGrantAdmin = {
+                try {
+                    context.startActivity(viewModel.getDeviceAdminPromptIntent(context))
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Không thể mở cài đặt Quản trị viên thiết bị", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = {
+                userDismissedStartupDialog = true
+                showStartupAutomationPermissionsDialog = false
+            }
+        )
+    }
+}
+
+// ======================================================================
+// DIALOG HỎI CẤP QUYỀN TỰ ĐỘNG HÓA KHI MỞ APP (MỞ APP & ĐI NGỦ)
+// ======================================================================
+@Composable
+fun AutomationPermissionsStartupDialog(
+    canDrawOverlays: Boolean,
+    isAdminActive: Boolean,
+    onGrantOverlay: () -> Unit,
+    onGrantAdmin: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E222A)),
+            border = BorderStroke(1.5.dp, Color(0xFF38BDF8).copy(alpha = 0.6f)),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .wrapContentHeight()
+                .padding(vertical = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Tiêu đề & Icon Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFF0369A1).copy(alpha = 0.35f),
+                        border = BorderStroke(1.dp, Color(0xFF38BDF8)),
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("⚡", fontSize = 22.sp)
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Cấp quyền Tự động hóa",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Mở app & Tắt máy đi ngủ ca làm",
+                            fontSize = 12.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Đóng",
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "Để 2 tính năng tự động mở app và khóa máy tắt màn hình hoạt động chính xác khi đến giờ đã cài đặt, bạn vui lòng cấp 2 quyền hệ thống dưới đây:",
+                    fontSize = 12.sp,
+                    color = Color(0xFFCBD5E1),
+                    lineHeight = 17.sp
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // ==========================================
+                // QUYỀN 1: MỞ APP KHI ĐẾN THỜI GIAN ĐÃ CÀI
+                // ==========================================
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (canDrawOverlays) Color(0xFF064E3B).copy(alpha = 0.4f) else Color(0xFF1E293B)
+                    ),
+                    border = BorderStroke(
+                        1.dp,
+                        if (canDrawOverlays) Color(0xFF10B981) else Color(0xFF6366F1).copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("📱", fontSize = 18.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "1. Tự mở ứng dụng khi đến giờ",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (canDrawOverlays) Color(0xFF6EE7B7) else Color(0xFFA5B4FC)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Quyền 'Hiển thị trên ứng dụng khác' (Overlay): Cho phép ứng dụng tự động khởi chạy app bạn đã chọn (Smart Dict, Học tập...) ngay cả khi đang tắt app hoặc ở màn hình khác.",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8),
+                            lineHeight = 15.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        if (canDrawOverlays) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF047857).copy(alpha = 0.35f),
+                                border = BorderStroke(1.dp, Color(0xFF10B981))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF34D399),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "✓ Đã cấp quyền thành công",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF6EE7B7)
+                                    )
+                                }
+                            }
+                        } else {
+                            Button(
+                                onClick = onGrantOverlay,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Cấp quyền: Hiển thị trên app khác", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // ==========================================
+                // QUYỀN 2: KHÓA MÀN HÌNH & TẮT MÁY ĐI NGỦ
+                // ==========================================
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isAdminActive) Color(0xFF064E3B).copy(alpha = 0.4f) else Color(0xFF1E293B)
+                    ),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isAdminActive) Color(0xFF10B981) else Color(0xFFF59E0B).copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🌙", fontSize = 18.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "2. Khóa màn hình & Tắt máy đi ngủ",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isAdminActive) Color(0xFF6EE7B7) else Color(0xFFFDE68A)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Quyền 'Quản trị viên thiết bị' (Device Admin): Cho phép ứng dụng tự động thu nhỏ các app về Home Screen và tắt khóa màn hình ngay khi đến giờ ngủ để bạn nghỉ ngơi.",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8),
+                            lineHeight = 15.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        if (isAdminActive) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF047857).copy(alpha = 0.35f),
+                                border = BorderStroke(1.dp, Color(0xFF10B981))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF34D399),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "✓ Đã kích hoạt quyền thành công",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF6EE7B7)
+                                    )
+                                }
+                            }
+                        } else {
+                            Button(
+                                onClick = onGrantAdmin,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Kích hoạt quyền Quản trị viên (Khóa tức thì)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // Bottom actions
+                val bothGranted = canDrawOverlays && isAdminActive
+                if (bothGranted) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("✓ Hoàn tất (Đã đủ 2 quyền)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0xFF475569)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF94A3B8)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                        ) {
+                            Text("Để sau", fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = {
+                                if (!canDrawOverlays) onGrantOverlay()
+                                else if (!isAdminActive) onGrantAdmin()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1.5f)
+                                .height(42.dp)
+                        ) {
+                            Text(
+                                if (!canDrawOverlays) "Cấp quyền mở app" else "Cấp quyền khóa máy",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         }

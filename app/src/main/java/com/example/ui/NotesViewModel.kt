@@ -620,7 +620,12 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
                 allShiftStations.collect { stations ->
                     if (stations.isNotEmpty()) {
                         val currentId = selectedStationId.value
-                        if (currentId == null || stations.none { it.id == currentId }) {
+                        val started = startedStationIds.value
+                        val startedStation = stations.firstOrNull { started.contains(it.id) }
+                        if (startedStation != null && (currentId == null || !started.contains(currentId))) {
+                            selectedStationId.value = startedStation.id
+                            prefs?.edit()?.putString("selected_station_id", startedStation.id)?.apply()
+                        } else if (currentId == null || stations.none { it.id == currentId }) {
                             val firstId = stations.first().id
                             selectedStationId.value = firstId
                             prefs?.edit()?.putString("selected_station_id", firstId)?.apply()
@@ -635,6 +640,20 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
 
     fun isStationStarted(stationId: String): Boolean {
         return startedStationIds.value.contains(stationId)
+    }
+
+    fun selectStartedStationIfAvailable() {
+        val started = startedStationIds.value
+        val stations = allShiftStations.value
+        if (started.isNotEmpty()) {
+            val currentId = selectedStationId.value
+            if (currentId == null || !started.contains(currentId)) {
+                val activeStation = stations.firstOrNull { started.contains(it.id) }
+                if (activeStation != null) {
+                    selectStation(activeStation.id)
+                }
+            }
+        }
     }
 
     fun selectStation(stationId: String, context: Context? = null) {
