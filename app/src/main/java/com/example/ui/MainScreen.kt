@@ -181,7 +181,14 @@ fun MainScreen(
                 val imported = StorageUtils.importDataFromZip(context, uri)
                 if (imported != null) {
                     viewModel.importBackupFromZip(context, imported)
-                    Toast.makeText(context, "Nhập sao lưu ZIP thành công!", Toast.LENGTH_SHORT).show()
+                    val details = buildList {
+                        if (imported.notes.isNotEmpty()) add("${imported.notes.size} ghi chú")
+                        if (imported.quickNotes.isNotEmpty()) add("${imported.quickNotes.size} ghi chú nhanh")
+                        if (imported.shiftTasks.isNotEmpty()) add("${imported.shiftTasks.size} việc ca làm")
+                        if (imported.roadmaps.isNotEmpty()) add("${imported.roadmaps.size} lộ trình AI (${imported.roadmapTasks.size} mốc)")
+                    }.joinToString(", ")
+                    val msg = if (details.isNotEmpty()) "Nhập sao lưu ZIP thành công: $details!" else "Nhập sao lưu ZIP thành công!"
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 } else {
                     Toast.makeText(context, "Tệp ZIP không đúng cấu trúc sao lưu!", Toast.LENGTH_LONG).show()
                 }

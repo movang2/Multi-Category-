@@ -466,8 +466,20 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
                 for (ho in backupData.shiftHandovers) {
                     repository.insertHandover(ho)
                 }
+                for (rm in backupData.roadmaps) {
+                    repository.insertRoadmap(rm)
+                }
+                for (rt in backupData.roadmapTasks) {
+                    repository.insertRoadmapTask(rt)
+                    if (rt.hasReminder && !rt.isCompleted) {
+                        scheduleRoadmapTaskAlarm(context, rt)
+                    }
+                }
                 if (selectedCategory.value == null && backupData.categories.isNotEmpty()) {
                     selectedCategory.value = backupData.categories.first()
+                }
+                if (selectedRoadmapId.value == null && backupData.roadmaps.isNotEmpty()) {
+                    selectedRoadmapId.value = backupData.roadmaps.first().id
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -911,6 +923,8 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
         val stations = repository.getAllShiftStationsDirect()
         val tasks = repository.getAllShiftTasksDirect()
         val handovers = repository.getAllShiftHandoversDirect()
+        val roadmaps = repository.getAllRoadmapsDirect()
+        val roadmapTasks = repository.getAllRoadmapTasksDirect()
 
         return com.example.utils.StorageUtils.exportDataToZip(
             context = context,
@@ -919,7 +933,9 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
             quickNotes = quickNotes,
             shiftStations = stations,
             shiftTasks = tasks,
-            shiftHandovers = handovers
+            shiftHandovers = handovers,
+            roadmaps = roadmaps,
+            roadmapTasks = roadmapTasks
         )
     }
 

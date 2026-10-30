@@ -9,6 +9,8 @@ import android.provider.MediaStore
 import com.example.data.Category
 import com.example.data.Note
 import com.example.data.QuickNote
+import com.example.data.Roadmap
+import com.example.data.RoadmapTask
 import com.example.data.ShiftHandover
 import com.example.data.ShiftStation
 import com.example.data.ShiftTask
@@ -24,7 +26,9 @@ data class ImportedZipData(
     val quickNotes: List<QuickNote> = emptyList(),
     val shiftStations: List<ShiftStation> = emptyList(),
     val shiftTasks: List<ShiftTask> = emptyList(),
-    val shiftHandovers: List<ShiftHandover> = emptyList()
+    val shiftHandovers: List<ShiftHandover> = emptyList(),
+    val roadmaps: List<Roadmap> = emptyList(),
+    val roadmapTasks: List<RoadmapTask> = emptyList()
 )
 
 object StorageUtils {
@@ -150,7 +154,9 @@ object StorageUtils {
         quickNotes: List<QuickNote> = emptyList(),
         shiftStations: List<ShiftStation> = emptyList(),
         shiftTasks: List<ShiftTask> = emptyList(),
-        shiftHandovers: List<ShiftHandover> = emptyList()
+        shiftHandovers: List<ShiftHandover> = emptyList(),
+        roadmaps: List<Roadmap> = emptyList(),
+        roadmapTasks: List<RoadmapTask> = emptyList()
     ): File? {
         return try {
             val cacheDir = context.cacheDir
@@ -279,6 +285,44 @@ object StorageUtils {
                 handoversArray.put(hJson)
             }
             root.put("shiftHandovers", handoversArray)
+
+            // Pack Roadmap & AI Plans
+            val roadmapsArray = JSONArray()
+            roadmaps.forEach { rm ->
+                val rmJson = JSONObject().apply {
+                    put("id", rm.id)
+                    put("title", rm.title)
+                    put("category", rm.category)
+                    put("icon", rm.icon)
+                    put("startDate", rm.startDate)
+                    put("totalDays", rm.totalDays)
+                    put("description", rm.description)
+                    put("createdAt", rm.createdAt)
+                }
+                roadmapsArray.put(rmJson)
+            }
+            root.put("roadmaps", roadmapsArray)
+
+            val roadmapTasksArray = JSONArray()
+            roadmapTasks.forEach { rt ->
+                val rtJson = JSONObject().apply {
+                    put("id", rt.id)
+                    put("roadmapId", rt.roadmapId)
+                    put("dayOffset", rt.dayOffset)
+                    put("scheduledDate", rt.scheduledDate)
+                    put("scheduledTime", rt.scheduledTime)
+                    put("title", rt.title)
+                    put("instruction", rt.instruction)
+                    put("phase", rt.phase)
+                    put("priority", rt.priority)
+                    put("isCompleted", rt.isCompleted)
+                    put("completedAt", rt.completedAt ?: JSONObject.NULL)
+                    put("hasReminder", rt.hasReminder)
+                    put("hasLoudAlarm", rt.hasLoudAlarm)
+                }
+                roadmapTasksArray.put(rtJson)
+            }
+            root.put("roadmapTasks", roadmapTasksArray)
             
             // 2. Write backup.json entry
             val backupJsonBytes = root.toString(2).toByteArray(Charsets.UTF_8)
@@ -350,6 +394,8 @@ object StorageUtils {
             val shiftStations = mutableListOf<ShiftStation>()
             val shiftTasks = mutableListOf<ShiftTask>()
             val shiftHandovers = mutableListOf<ShiftHandover>()
+            val roadmaps = mutableListOf<Roadmap>()
+            val roadmapTasks = mutableListOf<RoadmapTask>()
             
             val root = JSONObject(backupJsonString)
             if (root.has("categories")) {
@@ -490,13 +536,60 @@ object StorageUtils {
                 }
             }
 
+            // Parse Roadmaps
+            val roadmapsArray = root.optJSONArray("roadmaps")
+            if (roadmapsArray != null) {
+                for (i in 0 until roadmapsArray.length()) {
+                    val rObj = roadmapsArray.optJSONObject(i) ?: continue
+                    roadmaps.add(
+                        Roadmap(
+                            id = rObj.optString("id", java.util.UUID.randomUUID().toString()),
+                            title = rObj.optString("title", "Lộ trình"),
+                            category = rObj.optString("category", "Nông nghiệp"),
+                            icon = rObj.optString("icon", "🌱"),
+                            startDate = rObj.optString("startDate", "2026-10-29"),
+                            totalDays = rObj.optInt("totalDays", 30),
+                            description = rObj.optString("description", ""),
+                            createdAt = rObj.optLong("createdAt", System.currentTimeMillis())
+                        )
+                    )
+                }
+            }
+
+            // Parse Roadmap Tasks
+            val roadmapTasksArray = root.optJSONArray("roadmapTasks")
+            if (roadmapTasksArray != null) {
+                for (i in 0 until roadmapTasksArray.length()) {
+                    val rtObj = roadmapTasksArray.optJSONObject(i) ?: continue
+                    roadmapTasks.add(
+                        RoadmapTask(
+                            id = rtObj.optString("id", java.util.UUID.randomUUID().toString()),
+                            roadmapId = rtObj.optString("roadmapId", ""),
+                            dayOffset = rtObj.optInt("dayOffset", 0),
+                            scheduledDate = rtObj.optString("scheduledDate", "2026-10-29"),
+                            scheduledTime = rtObj.optString("scheduledTime", "08:00"),
+                            title = rtObj.optString("title", "Công việc"),
+                            instruction = rtObj.optString("instruction", ""),
+                            phase = rtObj.optString("phase", "Giai đoạn 1"),
+                            priority = rtObj.optString("priority", "Bình thường"),
+                            isCompleted = rtObj.optBoolean("isCompleted", false),
+                            completedAt = if (rtObj.isNull("completedAt")) null else rtObj.optLong("completedAt"),
+                            hasReminder = rtObj.optBoolean("hasReminder", true),
+                            hasLoudAlarm = rtObj.optBoolean("hasLoudAlarm", false)
+                        )
+                    )
+                }
+            }
+
             ImportedZipData(
                 categories = categories,
                 notes = notes,
                 quickNotes = quickNotes,
                 shiftStations = shiftStations,
                 shiftTasks = shiftTasks,
-                shiftHandovers = shiftHandovers
+                shiftHandovers = shiftHandovers,
+                roadmaps = roadmaps,
+                roadmapTasks = roadmapTasks
             )
         } catch (e: Exception) {
             e.printStackTrace()
