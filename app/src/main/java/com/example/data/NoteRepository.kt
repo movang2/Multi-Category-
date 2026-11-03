@@ -129,9 +129,12 @@ class NoteRepository(
         shiftDao.deleteStation(station)
     }
 
-    suspend fun removeLegacySampleData() {
-        val legacyIds = setOf("station_may_a", "station_may_b", "station_dong_goi", "station_ve_sinh", "station_kiem_tra")
-        val legacyNames = setOf("máy a", "máy b", "đóng gói", "vệ sinh", "kiểm tra đầu ca")
+    suspend fun removeDefaultSampleStations() {
+        val legacyIds = setOf(
+            "station_may_a", "station_may_b", "station_dong_goi", "station_ve_sinh", "station_kiem_tra",
+            "station_ca_ngay", "station_ca_dem", "station_ngay_nghi"
+        )
+        val legacyNames = setOf("ca ngày", "ca đêm", "ngày nghỉ", "máy a", "máy b", "đóng gói", "vệ sinh", "kiểm tra đầu ca")
         val existingStations = shiftDao.getAllStationsDirect()
         for (st in existingStations) {
             if (st.id in legacyIds || st.name.trim().lowercase() in legacyNames) {
@@ -144,19 +147,12 @@ class NoteRepository(
         }
     }
 
+    suspend fun removeLegacySampleData() {
+        removeDefaultSampleStations()
+    }
+
     suspend fun seedDefaultShiftDataIfEmpty(alreadySeeded: Boolean) {
-        removeLegacySampleData()
-
-        val existingStations = shiftDao.getAllStationsDirect()
-        if (existingStations.isEmpty()) {
-            val stationDay = ShiftStation("station_ca_ngay", "ca ngày", "🏭", "Ca làm việc ban ngày", "STATION_CA_NGAY")
-            val stationNight = ShiftStation("station_ca_dem", "ca đêm", "🏭", "Ca làm việc ban đêm", "STATION_CA_DEM")
-            val stationOff = ShiftStation("station_ngay_nghi", "ngày nghỉ", "🏭", "Ngày nghỉ ngơi", "STATION_NGAY_NGHI")
-
-            shiftDao.insertStation(stationDay)
-            shiftDao.insertStation(stationNight)
-            shiftDao.insertStation(stationOff)
-        }
+        // Do not seed any default shifts. Users can manually add shifts or use AI planner.
     }
 
     fun getNotesByCategory(categoryName: String): Flow<List<Note>> {

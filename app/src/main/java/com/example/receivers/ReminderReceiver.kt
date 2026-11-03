@@ -305,19 +305,23 @@ class ReminderReceiver : BroadcastReceiver() {
             val rawNoteText = intent.getStringExtra("NOTE_TEXT") ?: "Có công việc cần thực hiện!"
             val categoryName = intent.getStringExtra("CATEGORY_NAME") ?: "Nhắc nhở công việc & Ca làm"
 
-            val effTaskTitle = activeDbTask?.title
-                ?: intent.getStringExtra("TASK_TITLE")
-                ?: rawNoteText.substringBefore(":").removePrefix("📋 ").trim().ifBlank { "Công việc theo ca" }
+            val effTaskTitle = cleanNotificationText(
+                activeDbTask?.title
+                    ?: intent.getStringExtra("TASK_TITLE")
+                    ?: rawNoteText.substringBefore(":").removePrefix("📋 ").trim().ifBlank { "Công việc theo ca" }
+            )
 
-            val effTaskInstruction = activeDbTask?.instruction
-                ?: intent.getStringExtra("TASK_INSTRUCTION")
-                ?: if (rawNoteText.contains(":")) rawNoteText.substringAfter(":").trim() else ""
+            val effTaskInstruction = cleanNotificationText(
+                activeDbTask?.instruction
+                    ?: intent.getStringExtra("TASK_INSTRUCTION")
+                    ?: if (rawNoteText.contains(":")) rawNoteText.substringAfter(":").trim() else ""
+            )
 
             val effTimeScheduled = activeDbTask?.timeScheduled
                 ?: intent.getStringExtra("TIME_SCHEDULED")
                 ?: ""
 
-            val stationName = activeDbStation?.name ?: intent.getStringExtra("STATION_NAME") ?: ""
+            val stationName = cleanNotificationText(activeDbStation?.name ?: intent.getStringExtra("STATION_NAME") ?: "")
 
             // 1. NẾU LÀ CẢNH BÁO TRƯỚC 1 PHÚT CHO TÍNH NĂNG MỞ APP HOẶC KHÓA MÀN HÌNH ĐI NGỦ
             if (isAutomationPreWarning && (effActionType == "OPEN_APP" || effActionType == "LOCK_SCREEN")) {
@@ -339,28 +343,28 @@ class ReminderReceiver : BroadcastReceiver() {
                 }
 
                 val preTitle = if (effActionType == "OPEN_APP") {
-                    "⏳ [SẮP ĐẾN GIỜ] Mở ${effTargetAppName.ifBlank { "ứng dụng" }} (sau 1 phút)"
+                    "[Sắp đến giờ] Mở ${cleanNotificationText(effTargetAppName).ifBlank { "ứng dụng" }} (sau 1 phút)"
                 } else {
-                    "🌙 [SẮP ĐẾN GIỜ] Khóa màn hình & Đi ngủ (sau 1 phút)"
+                    "[Sắp đến giờ] Khóa màn hình & Đi ngủ (sau 1 phút)"
                 }
 
-                val preSummary = if (stationName.isNotBlank()) "📍 $stationName" else "Sắp thực hiện"
+                val preSummary = stationName.ifBlank { "Sắp thực hiện" }
 
                 val preBody = if (effActionType == "OPEN_APP") {
                     buildString {
-                        append("Ứng dụng ${effTargetAppName.ifBlank { "đã chọn" }} sẽ tự động mở lúc $effTimeScheduled để làm: $effTaskTitle.")
+                        append("Ứng dụng ${cleanNotificationText(effTargetAppName).ifBlank { "đã chọn" }} sẽ tự động mở lúc $effTimeScheduled để làm: $effTaskTitle.")
                         if (effTaskInstruction.isNotBlank()) {
-                            append("\n\n📖 Chi tiết: $effTaskInstruction")
+                            append("\n\nChi tiết: $effTaskInstruction")
                         }
-                        append("\n\n👉 Bạn có thể nhấn [⚡ Mở ngay] nếu muốn bắt đầu sớm hoặc [❌ Hủy lần này] nếu muốn bỏ qua.")
+                        append("\n\nBạn có thể nhấn [Mở ngay] nếu muốn bắt đầu sớm hoặc [Hủy lần này] nếu muốn bỏ qua.")
                     }
                 } else {
                     buildString {
                         append("Hệ thống sẽ tự động đóng ứng dụng và khóa màn hình lúc $effTimeScheduled ($effTaskTitle).")
                         if (effTaskInstruction.isNotBlank()) {
-                            append("\n\n📖 Chi tiết: $effTaskInstruction")
+                            append("\n\nChi tiết: $effTaskInstruction")
                         }
-                        append("\n\n👉 Bạn có thể nhấn [🔒 Khóa ngay] để nghỉ ngơi sớm hoặc [❌ Hủy lần này] nếu chưa muốn tắt máy.")
+                        append("\n\nBạn có thể nhấn [Khóa ngay] để nghỉ ngơi sớm hoặc [Hủy lần này] nếu chưa muốn tắt máy.")
                     }
                 }
 
@@ -379,7 +383,7 @@ class ReminderReceiver : BroadcastReceiver() {
                     execIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
-                val execLabel = if (effActionType == "OPEN_APP") "⚡ Mở ngay" else "🔒 Khóa ngay"
+                val execLabel = if (effActionType == "OPEN_APP") "Mở ngay" else "Khóa ngay"
 
                 // Nút 2: Hủy bỏ lần này
                 val cancelIntent = Intent(context, ReminderReceiver::class.java).apply {
@@ -395,7 +399,7 @@ class ReminderReceiver : BroadcastReceiver() {
                     cancelIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
-                val cancelLabel = "❌ Hủy lần này"
+                val cancelLabel = "Hủy lần này"
 
                 val openAppIntent = Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -685,26 +689,30 @@ class ReminderReceiver : BroadcastReceiver() {
             }
 
             val noteText = if (isShiftTask) {
-                if (effTaskInstruction.isNotBlank()) {
-                    "📝 Chi tiết: $effTaskInstruction"
-                } else if (effActionType == "OPEN_APP" && effTargetAppName.isNotBlank()) {
-                    "🚀 Đến giờ mở $effTargetAppName thực hiện: $effTaskTitle"
-                } else {
-                    "Đến giờ thực hiện: $effTaskTitle"
-                }
+                cleanNotificationText(
+                    if (effTaskInstruction.isNotBlank()) {
+                        "$effTaskTitle : $effTaskInstruction"
+                    } else if (effActionType == "OPEN_APP" && effTargetAppName.isNotBlank()) {
+                        "Đến giờ mở ${effTargetAppName}: $effTaskTitle"
+                    } else {
+                        effTaskTitle
+                    }
+                )
             } else {
-                when (effActionType) {
-                    "OPEN_APP" -> if (effTargetAppName.isNotBlank()) "🚀 Đã đến giờ mở ứng dụng $effTargetAppName! $rawNoteText" else rawNoteText
-                    "LOCK_SCREEN" -> "🌙 Đã đến giờ đi ngủ! Hệ thống đã đóng các ứng dụng về màn hình chính. Hãy nghỉ ngơi nhé!"
-                    "SILENT_MODE" -> "🔇 Đã chuyển điện thoại sang chế độ Im lặng / Tắt âm thanh theo lịch hẹn."
-                    "VIBRATE_MODE" -> "📳 Đã chuyển điện thoại sang chế độ Rung theo lịch hẹn."
-                    "NORMAL_SOUND" -> "🔔 Đã bật lại âm thanh chuông điện thoại bình thường theo lịch hẹn."
-                    "BLUETOOTH_ON" -> "🔵 Đã kích hoạt bật Bluetooth theo lịch hẹn."
-                    "BLUETOOTH_OFF" -> "🔵 Đã tắt kết nối Bluetooth theo lịch hẹn."
-                    "WIFI_PANEL" -> "📶 Nhấn để bật/tắt kết nối Wi-Fi nhanh 1 chạm."
-                    "MOBILE_DATA_PANEL" -> "🌐 Nhấn để bật/tắt Mạng di động (4G/5G) nhanh 1 chạm."
-                    else -> rawNoteText
-                }
+                cleanNotificationText(
+                    when (effActionType) {
+                        "OPEN_APP" -> if (effTargetAppName.isNotBlank()) "Đã đến giờ mở ứng dụng ${cleanNotificationText(effTargetAppName)}: $rawNoteText" else rawNoteText
+                        "LOCK_SCREEN" -> "Đã đến giờ đi ngủ! Hệ thống đã đóng các ứng dụng về màn hình chính."
+                        "SILENT_MODE" -> "Đã chuyển điện thoại sang chế độ Im lặng / Tắt âm thanh."
+                        "VIBRATE_MODE" -> "Đã chuyển điện thoại sang chế độ Rung."
+                        "NORMAL_SOUND" -> "Đã bật lại âm thanh chuông điện thoại bình thường."
+                        "BLUETOOTH_ON" -> "Đã bật kết nối Bluetooth."
+                        "BLUETOOTH_OFF" -> "Đã tắt kết nối Bluetooth."
+                        "WIFI_PANEL" -> "Nhấn để bật/tắt kết nối Wi-Fi nhanh 1 chạm."
+                        "MOBILE_DATA_PANEL" -> "Nhấn để bật/tắt Mạng di động (4G/5G) nhanh 1 chạm."
+                        else -> rawNoteText
+                    }
+                )
             }
 
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -782,56 +790,36 @@ class ReminderReceiver : BroadcastReceiver() {
                 pendingIntent
             }
 
-            val displayTitle = if (isQuickNote) {
-                "⚡ [GHI CHÚ NHANH] Nhắc nhở"
+            val displayTitle = if (isShiftTask) {
+                "" // Bỏ tiêu đề in đậm cho thông báo ca làm việc để tránh lặp từ và tối giản nội dung
+            } else if (isQuickNote) {
+                "[GHI CHÚ NHANH] $effTaskTitle"
             } else if (isRoadmapTask) {
-                if (effHasLoudAlarm) "⏰ [LỘ TRÌNH ĐA THÁNG] $categoryName" else "📅 [LỘ TRÌNH] $categoryName"
-            } else if (isShiftTask) {
-                val icon = if (effHasLoudAlarm) "⏰" else "🔔"
-                val timeStr = if (effTimeScheduled.isNotBlank()) "[$effTimeScheduled] " else ""
-                val stationSuffix = if (stationName.isNotBlank()) " • $stationName" else ""
-                "$icon $timeStr$effTaskTitle$stationSuffix"
+                cleanNotificationText(categoryName).ifBlank { "Lộ trình" }
             } else {
                 when (effActionType) {
-                    "OPEN_APP" -> if (effTargetAppName.isNotBlank()) "🚀 [MỞ $effTargetAppName] $categoryName" else "🚀 $categoryName"
-                    "LOCK_SCREEN" -> "🌙 [ĐẾN GIỜ ĐI NGỦ] Khóa màn hình & Tắt app"
-                    "SILENT_MODE" -> "🔇 [TẮT ÂM THANH] Chế độ Im lặng"
-                    "VIBRATE_MODE" -> "📳 [CHUYỂN SANG RUNG] $categoryName"
-                    "NORMAL_SOUND" -> "🔔 [BẬT LẠI ÂM THANH] Chuông bình thường"
-                    "BLUETOOTH_ON" -> "🔵 [BẬT BLUETOOTH] $categoryName"
-                    "BLUETOOTH_OFF" -> "🔵 [TẮT BLUETOOTH] $categoryName"
-                    "WIFI_PANEL" -> "📶 [CÀI ĐẶT WI-FI] $categoryName"
-                    "MOBILE_DATA_PANEL" -> "🌐 [MẠNG DI ĐỘNG] $categoryName"
-                    else -> if (effHasLoudAlarm) "⏰ [CHUÔNG BÁO] $categoryName" else "🔔 $categoryName"
+                    "OPEN_APP" -> if (effTargetAppName.isNotBlank()) "Mở ${cleanNotificationText(effTargetAppName)}" else effTaskTitle
+                    "LOCK_SCREEN" -> "Đến giờ đi ngủ"
+                    "SILENT_MODE" -> "Chế độ Im lặng"
+                    "VIBRATE_MODE" -> "Chuyển sang Rung"
+                    "NORMAL_SOUND" -> "Bật lại âm thanh"
+                    "BLUETOOTH_ON" -> "Bật Bluetooth"
+                    "BLUETOOTH_OFF" -> "Tắt Bluetooth"
+                    "WIFI_PANEL" -> "Cài đặt Wi-Fi"
+                    "MOBILE_DATA_PANEL" -> "Mạng di động"
+                    else -> cleanNotificationText(categoryName).ifBlank { effTaskTitle }
                 }
             }
 
-            val bigTextStyle = if (isShiftTask) {
-                val fullDetail = buildString {
-                    if (effTaskInstruction.isNotBlank()) {
-                        append("📖 Hướng dẫn chi tiết:\n$effTaskInstruction")
-                    } else {
-                        append("Đến giờ thực hiện: $effTaskTitle")
-                    }
-                    if (effActionType == "OPEN_APP" && effTargetAppName.isNotBlank()) {
-                        append("\n\n🚀 Tự động mở ứng dụng: $effTargetAppName")
-                    }
-                    if (stationName.isNotBlank()) {
-                        append("\n📍 Vị trí/Ca: $stationName")
-                    }
-                }
-                NotificationCompat.BigTextStyle()
-                    .setBigContentTitle(displayTitle)
-                    .setSummaryText(if (stationName.isNotBlank()) stationName else "Nhắc ca làm")
-                    .bigText(fullDetail)
-            } else {
-                NotificationCompat.BigTextStyle().bigText(noteText)
+            val bigTextStyle = NotificationCompat.BigTextStyle()
+                .bigText(noteText)
+            if (displayTitle.isNotBlank()) {
+                bigTextStyle.setBigContentTitle(displayTitle)
             }
 
             val notificationBuilder = NotificationCompat.Builder(context, channelId)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setColor(ContextCompat.getColor(context, R.color.notification_accent))
-                .setContentTitle(displayTitle)
                 .setContentText(noteText)
                 .setStyle(bigTextStyle)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -841,7 +829,11 @@ class ReminderReceiver : BroadcastReceiver() {
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
 
-            if (stationName.isNotBlank()) {
+            if (displayTitle.isNotBlank()) {
+                notificationBuilder.setContentTitle(displayTitle)
+            }
+
+            if (!isShiftTask && stationName.isNotBlank()) {
                 notificationBuilder.setSubText(stationName)
             }
 
@@ -849,7 +841,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 notificationBuilder.setFullScreenIntent(launchPendingIntent, true)
                 notificationBuilder.addAction(
                     android.R.drawable.ic_menu_send,
-                    "🚀 Mở $effTargetAppName ngay",
+                    "Mở ${cleanNotificationText(effTargetAppName).ifBlank { "ứng dụng" }} ngay",
                     launchPendingIntent
                 )
             }
@@ -867,7 +859,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 )
                 notificationBuilder.addAction(
                     android.R.drawable.ic_lock_power_off,
-                    "🔒 Khóa màn hình",
+                    "Khóa màn hình",
                     lockPendingIntent
                 )
             }
@@ -886,7 +878,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 )
                 notificationBuilder.addAction(
                     android.R.drawable.presence_online,
-                    "📶 Bật/Tắt Wi-Fi",
+                    "Bật/Tắt Wi-Fi",
                     wifiPendingIntent
                 )
             } else if (effActionType == "MOBILE_DATA_PANEL") {
@@ -903,7 +895,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 )
                 notificationBuilder.addAction(
                     android.R.drawable.presence_online,
-                    "🌐 Mạng di động 4G/5G",
+                    "Mạng di động 4G/5G",
                     dataPendingIntent
                 )
             }
@@ -926,7 +918,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 )
                 notificationBuilder.addAction(
                     android.R.drawable.ic_menu_close_clear_cancel,
-                    "🛑 Tắt chuông",
+                    "Tắt chuông",
                     dismissPendingIntent
                 )
                 notificationBuilder.setDeleteIntent(dismissPendingIntent)
@@ -1026,6 +1018,22 @@ class ReminderReceiver : BroadcastReceiver() {
             }
         }
 
+        fun cleanNotificationText(input: String?): String {
+            if (input.isNullOrBlank()) return ""
+            val emojiRegex = Regex(
+                "[\uD83C-\uDBFF\uDC00-\uDFFF]" + // Surrogate pairs (most emojis: 🏭, 🛌, ⏰, 🔔, 🚀, 🌙, 📝, 📖, 📍, etc.)
+                "|[\u2600-\u27BF]" +             // Misc symbols, dingbats (⚡, ⏰, ⏳, ✈, ☎, etc.)
+                "|[\uFE00-\uFE0F]" +             // Variation selectors
+                "|[\u200D]" +                     // Zero width joiner
+                "|[\u2300-\u23FF]" +             // Misc technical
+                "|[\u2B50-\u2B55]" +             // Stars
+                "|[\u3030\u303D]"
+            )
+            return input.replace(emojiRegex, "")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+        }
+
         fun sendNotificationNow(context: Context, title: String, text: String, hasLoudAlarm: Boolean = false) {
             try {
                 val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -1059,12 +1067,15 @@ class ReminderReceiver : BroadcastReceiver() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
 
+                val cleanT = cleanNotificationText(title)
+                val cleanB = cleanNotificationText(text)
+
                 val notification = NotificationCompat.Builder(context, channelId)
                     .setSmallIcon(R.drawable.ic_notification)
                     .setColor(ContextCompat.getColor(context, R.color.notification_accent))
-                    .setContentTitle(if (hasLoudAlarm) "⏰ $title" else "🔔 $title")
-                    .setContentText(text)
-                    .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                    .setContentTitle(cleanT)
+                    .setContentText(cleanB)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(cleanB))
                     .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setCategory(if (hasLoudAlarm) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_REMINDER)
                     .setDefaults(NotificationCompat.DEFAULT_ALL)

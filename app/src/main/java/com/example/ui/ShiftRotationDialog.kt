@@ -50,20 +50,35 @@ fun ShiftRotationDialog(
     var notifyOnSwitch by remember { mutableStateOf(currentConfig.notifyOnSwitch) }
     var anchorMondayMillis by remember { mutableStateOf(currentConfig.anchorMondayMillis) }
 
+    val defaultStation1 = stations.firstOrNull()?.name ?: "Nghỉ"
+    val defaultStation2 = stations.getOrNull(1)?.name ?: defaultStation1
+
     // Assignments map: key = "${weekIndex}_${dayOfWeek}", value = stationName
-    var assignmentsMap by remember {
+    var assignmentsMap by remember(stations, currentConfig) {
         val map = mutableStateMapOf<String, String>()
+        val existingNames = stations.map { it.name.trim().lowercase() }.toSet()
+
         currentConfig.assignments.forEach { a ->
-            map["${a.weekIndex}_${a.dayOfWeek}"] = a.targetStationName
+            val targetLower = a.targetStationName.trim().lowercase()
+            if (targetLower in existingNames) {
+                val matched = stations.find { it.name.trim().equals(a.targetStationName.trim(), ignoreCase = true) }
+                map["${a.weekIndex}_${a.dayOfWeek}"] = matched?.name ?: a.targetStationName
+            } else if (targetLower == "nghỉ" || targetLower == "ngày nghỉ") {
+                map["${a.weekIndex}_${a.dayOfWeek}"] = "Nghỉ"
+            } else {
+                // If it was legacy default name that no longer exists in stations
+                val fallback = if (a.dayOfWeek in 6..7) "Nghỉ" else (if (a.weekIndex == 0) defaultStation1 else defaultStation2)
+                map["${a.weekIndex}_${a.dayOfWeek}"] = fallback
+            }
         }
         // Fill defaults if empty
         if (map.isEmpty()) {
-            for (day in 1..5) map["0_$day"] = "ca ngày"
-            map["0_6"] = "ngày nghỉ"
-            map["0_7"] = "ngày nghỉ"
-            for (day in 1..5) map["1_$day"] = "ca đêm"
-            map["1_6"] = "ngày nghỉ"
-            map["1_7"] = "ngày nghỉ"
+            for (day in 1..5) map["0_$day"] = defaultStation1
+            map["0_6"] = "Nghỉ"
+            map["0_7"] = "Nghỉ"
+            for (day in 1..5) map["1_$day"] = defaultStation2
+            map["1_6"] = "Nghỉ"
+            map["1_7"] = "Nghỉ"
         }
         mutableStateOf(map)
     }
@@ -121,7 +136,7 @@ fun ShiftRotationDialog(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Tự động bật/tắt ca ngày, ca đêm, ngày nghỉ",
+                                text = "Tự động luân chuyển các ca làm đã tạo theo tuần",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -140,6 +155,30 @@ fun ShiftRotationDialog(
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
                 ) {
+                    if (stations.isEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF78350F).copy(alpha = 0.25f),
+                            border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.5f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Chưa có ca làm việc nào được tạo. Hãy nhấn '+ Thêm' ở màn hình chính để tạo ca trước khi xếp lịch.",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFFDE68A)
+                                )
+                            }
+                        }
+                    }
+
                     // Master Switch
                     Surface(
                         shape = RoundedCornerShape(14.dp),
@@ -253,16 +292,22 @@ fun ShiftRotationDialog(
                         Text("Phân bổ ca theo tuần:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         TextButton(
                             onClick = {
-                                // Reset to standard 2-week preset: Week 1 Day shift, Week 2 Night shift, Sat-Sun Off
+                                if (stations.isEmpty()) {
+                                    Toast.makeText(context, "Chưa có ca làm việc nào. Vui lòng tạo ca làm trước!", Toast.LENGTH_SHORT).show()
+                                    return@TextButton
+                                }
+                                val s1 = stations.first().name
+                                val s2 = stations.getOrNull(1)?.name ?: s1
                                 val map = mutableStateMapOf<String, String>()
-                                for (day in 1..5) map["0_$day"] = "ca ngày"
-                                map["0_6"] = "ngày nghỉ"
-                                map["0_7"] = "ngày nghỉ"
-                                for (day in 1..5) map["1_$day"] = "ca đêm"
-                                map["1_6"] = "ngày nghỉ"
-                                map["1_7"] = "ngày nghỉ"
+                                for (day in 1..5) map["0_$day"] = s1
+                                map["0_6"] = "Nghỉ"
+                                map["0_7"] = "Nghỉ"
+                                for (day in 1..5) map["1_$day"] = s2
+                                map["1_6"] = "Nghỉ"
+                                map["1_7"] = "Nghỉ"
                                 assignmentsMap = map
-                                Toast.makeText(context, "Đã áp dụng mẫu: Tuần ngày - Tuần đêm (T7-CN nghỉ)", Toast.LENGTH_SHORT).show()
+                                val desc = if (stations.size >= 2) "Tuần 1: $s1 • Tuần 2: $s2 (T7-CN nghỉ)" else "Tuần 1 & 2: $s1 (T7-CN nghỉ)"
+                                Toast.makeText(context, "Đã áp dụng mẫu: $desc", Toast.LENGTH_SHORT).show()
                             },
                             contentPadding = PaddingValues(0.dp)
                         ) {
@@ -298,14 +343,19 @@ fun ShiftRotationDialog(
                         for (day in 1..7) {
                             val dayName = ShiftRotationManager.getDayName(day)
                             val key = "${selectedWeekTab}_$day"
-                            val assignedStationName = assignmentsMap[key] ?: if (day in 1..5) (if (selectedWeekTab == 0) "ca ngày" else "ca đêm") else "ngày nghỉ"
+                            val assignedStationName = assignmentsMap[key] ?: if (day in 1..5) (if (selectedWeekTab == 0) defaultStation1 else defaultStation2) else "Nghỉ"
 
                             val isWeekend = day in 6..7
-                            val badgeColor = when {
-                                assignedStationName.contains("ngày", ignoreCase = true) && !assignedStationName.contains("nghỉ", ignoreCase = true) -> Color(0xFFF59E0B)
-                                assignedStationName.contains("đêm", ignoreCase = true) -> Color(0xFF818CF8)
-                                assignedStationName.contains("nghỉ", ignoreCase = true) -> Color(0xFF10B981)
-                                else -> MaterialTheme.colorScheme.primary
+                            val matchedStation = stations.find { it.name.trim().equals(assignedStationName.trim(), ignoreCase = true) }
+                            val isOff = matchedStation == null && assignedStationName.trim().equals("Nghỉ", ignoreCase = true)
+
+                            val badgeColor = if (isOff) Color(0xFF10B981) else Color(0xFFF59E0B)
+                            val displayLabel = if (matchedStation != null) {
+                                "${matchedStation.icon} ${matchedStation.name}"
+                            } else if (isOff) {
+                                "🛌 Nghỉ"
+                            } else {
+                                "🏭 $assignedStationName"
                             }
 
                             Surface(
@@ -348,7 +398,7 @@ fun ShiftRotationDialog(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = assignedStationName,
+                                                text = displayLabel,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = badgeColor
@@ -466,53 +516,76 @@ fun ShiftRotationDialog(
         val targetDay = stationPickerDay!!
         val dayName = ShiftRotationManager.getDayName(targetDay)
 
-        // Build list of options: all available stations in app + "ngày nghỉ"
-        val options = mutableListOf<String>()
+        // Build list of options: ONLY user's actual created stations in app + "Nghỉ"
+        data class ShiftOptionItem(val name: String, val icon: String, val isOff: Boolean)
+        val options = mutableListOf<ShiftOptionItem>()
         stations.forEach { st ->
-            if (st.name !in options) options.add(st.name)
+            if (options.none { it.name.trim().equals(st.name.trim(), ignoreCase = true) }) {
+                options.add(ShiftOptionItem(st.name, st.icon, false))
+            }
         }
-        if ("ngày nghỉ" !in options) options.add("ngày nghỉ")
-        if ("ca ngày" !in options) options.add("ca ngày")
-        if ("ca đêm" !in options) options.add("ca đêm")
+        if (options.none { it.name.trim().equals("Nghỉ", ignoreCase = true) }) {
+            options.add(ShiftOptionItem("Nghỉ", "🛌", true))
+        }
+
+        val currentVal = assignmentsMap["${selectedWeekTab}_$targetDay"]
+            ?: if (targetDay in 1..5) (if (selectedWeekTab == 0) defaultStation1 else defaultStation2) else "Nghỉ"
 
         AlertDialog(
             onDismissRequest = { stationPickerDay = null },
             title = {
                 Text(
                     text = "Chọn ca cho $dayName (Tuần ${selectedWeekTab + 1})",
-                    fontSize = 15.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    options.forEach { optionName ->
-                        val currentVal = assignmentsMap["${selectedWeekTab}_$targetDay"]
-                        val isSelected = currentVal == optionName
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (stations.isEmpty()) {
+                        Text(
+                            text = "Chưa có ca làm việc nào. Hãy tạo ca trong màn hình Quản lý ca làm.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    options.forEach { optionItem ->
+                        val isSelected = currentVal.trim().equals(optionItem.name.trim(), ignoreCase = true)
+
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(10.dp),
                             color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    assignmentsMap["${selectedWeekTab}_$targetDay"] = optionName
+                                    assignmentsMap["${selectedWeekTab}_$targetDay"] = optionItem.name
                                     stationPickerDay = null
                                 }
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    .padding(horizontal = 14.dp, vertical = 11.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = optionName,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = optionItem.icon,
+                                        fontSize = 16.sp
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = optionItem.name,
+                                        fontSize = 14.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                                 if (isSelected) {
-                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                                 }
                             }
                         }
@@ -541,14 +614,15 @@ private fun buildConfig(
     val list = mutableListOf<ShiftDayAssignment>()
     for (w in 0 until cycleWeeks) {
         for (d in 1..7) {
-            val stName = assignmentsMap["${w}_$d"] ?: (if (d in 1..5) (if (w == 0) "ca ngày" else "ca đêm") else "ngày nghỉ")
+            val defaultName = if (d in 6..7) "Nghỉ" else (stations.firstOrNull()?.name ?: "Nghỉ")
+            val stName = assignmentsMap["${w}_$d"] ?: defaultName
             val matchedStation = stations.find { it.name.trim().equals(stName.trim(), ignoreCase = true) }
             list.add(
                 ShiftDayAssignment(
                     weekIndex = w,
                     dayOfWeek = d,
                     stationId = matchedStation?.id,
-                    targetStationName = stName
+                    targetStationName = if (matchedStation != null) matchedStation.name else "Nghỉ"
                 )
             )
         }

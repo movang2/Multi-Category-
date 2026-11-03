@@ -41,7 +41,7 @@ object ShiftAlarmHelper {
         }
 
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
-        val noteDetail = if (task.instruction.isNotBlank()) "📝 Chi tiết: ${task.instruction}" else "📋 Công việc: ${task.title}"
+        val noteDetail = if (task.instruction.isNotBlank()) "${task.title} : ${task.instruction}" else task.title
 
         // Xóa cờ hủy cũ nếu có để sẵn sàng cho lần chạy mới
         val prefs = context.getSharedPreferences("notes_app_prefs", Context.MODE_PRIVATE)

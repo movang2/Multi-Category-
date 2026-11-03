@@ -293,9 +293,9 @@ fun ShiftManagementView(
                         shape = RoundedCornerShape(13.dp),
                         color = if (isSelected) ShiftBlue else DarkCard,
                         border = when {
-                            isSelected && isStationStarted -> BorderStroke(1.5.dp, Color(0xFFF97316))
+                            isSelected && isStationStarted -> BorderStroke(1.5.dp, Color(0xFFEF4444))
                             isSelected -> null
-                            isStationStarted -> BorderStroke(1.5.dp, Color(0xFFF97316))
+                            isStationStarted -> BorderStroke(1.5.dp, Color(0xFFEF4444))
                             else -> BorderStroke(1.dp, DarkBorder)
                         },
                         contentColor = if (isSelected) Color.White else TextSecondary,
@@ -335,26 +335,10 @@ fun ShiftManagementView(
                                 fontWeight = if (isSelected || isStationStarted) FontWeight.Bold else FontWeight.Medium,
                                 color = when {
                                     isSelected -> Color.White
-                                    isStationStarted -> Color(0xFFFDBA74)
+                                    isStationStarted -> Color(0xFFF87171)
                                     else -> TextSecondary
                                 }
                             )
-                            if (isStationStarted && !isSelected) {
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = Color(0xFFC2410C),
-                                    modifier = Modifier.padding(start = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "ĐANG CHẠY",
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
                             if (isSelected) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Icon(
@@ -484,6 +468,23 @@ fun ShiftManagementView(
                                     )
                                 }
                             }
+
+                            if (tasks.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF1E293B),
+                                    border = BorderStroke(1.dp, Color(0xFF334155))
+                                ) {
+                                    Text(
+                                        text = "${tasks.size} việc",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF94A3B8),
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
                         }
 
                         val firstTask = tasks.firstOrNull()
@@ -608,7 +609,69 @@ fun ShiftManagementView(
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            if (tasks.isEmpty()) {
+            if (stations.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = ShiftBlue.copy(alpha = 0.15f),
+                            modifier = Modifier.size(64.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Default.Schedule,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(36.dp),
+                                    tint = ShiftLightBlue
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            "Chưa có vị trí / ca làm nào",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Nhấn 'Thêm vị trí' để tự tạo thủ công hoặc nhờ AI lập lịch",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = {
+                                    stationToEdit = null
+                                    showAddStationDialog = true
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = ShiftBlue)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Thêm vị trí", fontWeight = FontWeight.Bold)
+                            }
+                            FilledTonalButton(
+                                onClick = { showAiPlannerDialog = true },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(containerColor = DarkSubCard, contentColor = ShiftLightBlue)
+                            ) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Lập lịch AI", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            } else if (tasks.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -673,49 +736,32 @@ fun ShiftManagementView(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f, fill = false)
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (prioritizeNearCurrentTime) Color(0xFF78350F).copy(alpha = 0.5f) else DarkSubCard,
-                                    border = BorderStroke(1.dp, if (prioritizeNearCurrentTime) Color(0xFFF59E0B) else DarkBorder),
-                                    modifier = Modifier.clickable {
-                                        prioritizeNearCurrentTime = !prioritizeNearCurrentTime
-                                    }
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = if (prioritizeNearCurrentTime) Icons.Default.Bolt else Icons.Default.Schedule,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(13.dp),
-                                            tint = if (prioritizeNearCurrentTime) Color(0xFFFDE68A) else TextSecondary
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = if (prioritizeNearCurrentTime) "⚡ Gần giờ nhất" else "⏱️ Thứ tự ca",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (prioritizeNearCurrentTime) Color(0xFFFDE68A) else TextSecondary
-                                        )
-                                    }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (prioritizeNearCurrentTime) Color(0xFF78350F).copy(alpha = 0.5f) else DarkSubCard,
+                                border = BorderStroke(1.dp, if (prioritizeNearCurrentTime) Color(0xFFF59E0B) else DarkBorder),
+                                modifier = Modifier.clickable {
+                                    prioritizeNearCurrentTime = !prioritizeNearCurrentTime
                                 }
-
-                                Spacer(modifier = Modifier.width(6.dp))
-
-                                val timeSpan = if (tasks.size >= 2) " (${tasks.first().timeScheduled} → ${tasks.last().timeScheduled})" else ""
-                                Text(
-                                    text = if (prioritizeNearCurrentTime) "${upcomingTasks.size}/${tasks.size} việc" else "${tasks.size} bước$timeSpan",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (prioritizeNearCurrentTime) Icons.Default.Bolt else Icons.Default.Schedule,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(13.dp),
+                                        tint = if (prioritizeNearCurrentTime) Color(0xFFFDE68A) else TextSecondary
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (prioritizeNearCurrentTime) "⚡ Gần giờ nhất" else "⏱️ Thứ tự ca",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (prioritizeNearCurrentTime) Color(0xFFFDE68A) else TextSecondary
+                                    )
+                                }
                             }
 
                             Spacer(modifier = Modifier.width(8.dp))

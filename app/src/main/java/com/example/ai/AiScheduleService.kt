@@ -97,7 +97,19 @@ class AiScheduleService {
                      }
                    }
                    ```
-                4. NẾU người dùng lập lịch trình các bước công việc 1 ngày hoặc quy trình nấu nướng:
+                4. NẾU người dùng lập lịch trình các bước công việc 1 ngày, lịch sinh hoạt, hoặc quy trình nấu nướng / tự động hóa thiết bị:
+                   Ứng dụng có các TÁC VỤ TỰ ĐỘNG HÓA KHI ĐẾN GIỜ (actionType):
+                   - "" (hoặc "NONE"): Chỉ nhắc việc bình thường qua thông báo.
+                   - "OPEN_APP": Tự động mở ứng dụng trên điện thoại khi đến giờ (cần "targetPackageName" và "targetAppName"). Ví dụ người dùng yêu cầu mở TikTok, YouTube, Chrome, Zalo, hoặc prompt có chứa "[Mở app: TênApp (package.name)]", hãy đặt actionType: "OPEN_APP", targetPackageName, targetAppName tương ứng.
+                   - "LOCK_SCREEN": Khóa màn hình & Tắt ứng dụng (Chế độ đi ngủ).
+                   - "SILENT_MODE": Tắt âm thanh (Chế độ Im lặng - lúc vào cuộc họp, vào ca làm việc, hoặc giờ đi ngủ).
+                   - "VIBRATE_MODE": Chuyển sang chế độ Rung.
+                   - "NORMAL_SOUND": Bật lại chuông bình thường (lúc tan ca hoặc buổi sáng thức dậy).
+                   - "BLUETOOTH_ON": Tự động BẬT Bluetooth.
+                   - "BLUETOOTH_OFF": Tự động TẮT Bluetooth (tiết kiệm pin, bảo mật ban đêm).
+                   - "WIFI_PANEL": Mở nhanh bảng bật/tắt Wi-Fi.
+                   - "MOBILE_DATA_PANEL": Mở nhanh bảng bật/tắt dữ liệu di động 4G/5G.
+
                    BẮT BUỘC cung cấp khối JSON trong cặp ```json ... ```:
                    ```json
                    {
@@ -110,7 +122,10 @@ class AiScheduleService {
                          "title": "Tên bước/công việc",
                          "instruction": "Hướng dẫn thực hiện",
                          "priority": "Bình thường",
-                         "hasLoudAlarm": false
+                         "hasLoudAlarm": false,
+                         "actionType": "",
+                         "targetPackageName": "",
+                         "targetAppName": ""
                        }
                      ]
                    }
@@ -262,13 +277,26 @@ class AiScheduleService {
                             p.contains("kho cá") || p.contains("cá") || p.contains("nấu") || p.contains("bếp") || p.contains("nướng") || p.contains("báo thức")
                         }
                         val hasLoudAlarm = if (sObj.has("hasLoudAlarm")) sObj.optBoolean("hasLoudAlarm") else isCookingOrFish
+
+                        val rawAction = sObj.optString("actionType", "")
+                        val rawPkg = sObj.optString("targetPackageName", "")
+                        val rawApp = sObj.optString("targetAppName", "")
+                        val (effAction, effPkg, effApp) = if (rawAction.isNotBlank() && rawAction != "NONE") {
+                            Triple(rawAction, rawPkg, rawApp)
+                        } else {
+                            detectAutomationAction(stepTitle, instr, prompt)
+                        }
+
                         stepsList.add(
                             AiScheduleStep(
                                 timeScheduled = normalizeTime(time),
                                 title = stepTitle,
                                 instruction = instr,
                                 priority = priority,
-                                hasLoudAlarm = hasLoudAlarm
+                                hasLoudAlarm = hasLoudAlarm,
+                                actionType = effAction,
+                                targetPackageName = effPkg,
+                                targetAppName = effApp
                             )
                         )
                     }
@@ -308,6 +336,75 @@ class AiScheduleService {
         cal.add(Calendar.MINUTE, addMinutes)
         val format = SimpleDateFormat("HH:mm", Locale.getDefault())
         return format.format(cal.time)
+    }
+
+    /**
+     * Tự động phát hiện tác vụ tự động hóa từ tiêu đề, hướng dẫn hoặc văn bản prompt
+     */
+    fun detectAutomationAction(
+        title: String,
+        instruction: String,
+        fullPrompt: String = ""
+    ): Triple<String, String, String> { // actionType, targetPackageName, targetAppName
+        val combined = "$title $instruction $fullPrompt"
+        val lower = combined.lowercase(Locale.getDefault())
+
+        // 1. Kiểm tra cú pháp tag: [Mở app: AppName (com.package.name)]
+        val openAppTagRegex = """\[Mở app:\s*([^()]+?)\s*\(([^()]+?)\)\]""".toRegex(RegexOption.IGNORE_CASE)
+        val tagMatch = openAppTagRegex.find(combined)
+        if (tagMatch != null) {
+            val appName = tagMatch.groupValues[1].trim()
+            val pkgName = tagMatch.groupValues[2].trim()
+            return Triple("OPEN_APP", pkgName, appName)
+        }
+
+        // 2. Mở app
+        if (lower.contains("mở app") || lower.contains("hẹn mở app") || lower.contains("bật app") || lower.contains("mở ứng dụng") || lower.contains("bật ứng dụng")) {
+            return when {
+                lower.contains("tiktok") -> Triple("OPEN_APP", "com.zhiliaoapp.musically", "TikTok")
+                lower.contains("youtube") -> Triple("OPEN_APP", "com.google.android.youtube", "YouTube")
+                lower.contains("facebook") -> Triple("OPEN_APP", "com.facebook.katana", "Facebook")
+                lower.contains("zalo") -> Triple("OPEN_APP", "com.zing.zalo", "Zalo")
+                lower.contains("chrome") -> Triple("OPEN_APP", "com.android.chrome", "Chrome")
+                lower.contains("báo thức") || lower.contains("đồng hồ") || lower.contains("clock") -> Triple("OPEN_APP", "com.google.android.deskclock", "Đồng hồ")
+                lower.contains("nhạc") || lower.contains("spotify") -> Triple("OPEN_APP", "com.spotify.music", "Spotify")
+                else -> Triple("OPEN_APP", "", "Ứng dụng")
+            }
+        }
+
+        // 3. Khóa máy / Đi ngủ
+        if (lower.contains("khóa máy") || lower.contains("đi ngủ") || lower.contains("tắt màn hình") || lower.contains("khóa màn hình")) {
+            return Triple("LOCK_SCREEN", "", "")
+        }
+
+        // 4. Chế độ âm thanh
+        if (lower.contains("im lặng") || lower.contains("tắt âm thanh") || lower.contains("tắt âm") || lower.contains("không làm phiền")) {
+            return Triple("SILENT_MODE", "", "")
+        }
+        if (lower.contains("bật rung") || lower.contains("chế độ rung") || lower.contains("đổi sang rung")) {
+            return Triple("VIBRATE_MODE", "", "")
+        }
+        if (lower.contains("bật chuông") || lower.contains("chuông bình thường") || lower.contains("bật lại chuông") || lower.contains("bật âm thanh")) {
+            return Triple("NORMAL_SOUND", "", "")
+        }
+
+        // 5. Bluetooth
+        if (lower.contains("bật bluetooth") || lower.contains("kết nối bluetooth") || (lower.contains("bluetooth") && lower.contains("bật"))) {
+            return Triple("BLUETOOTH_ON", "", "")
+        }
+        if (lower.contains("tắt bluetooth") || lower.contains("ngắt bluetooth") || (lower.contains("bluetooth") && (lower.contains("tắt") || lower.contains("ngắt")))) {
+            return Triple("BLUETOOTH_OFF", "", "")
+        }
+
+        // 6. Wi-Fi & Mạng di động
+        if (lower.contains("wifi") || lower.contains("wi-fi")) {
+            return Triple("WIFI_PANEL", "", "")
+        }
+        if (lower.contains("4g") || lower.contains("5g") || lower.contains("mạng di động") || lower.contains("dữ liệu di động")) {
+            return Triple("MOBILE_DATA_PANEL", "", "")
+        }
+
+        return Triple("", "", "")
     }
 
     /**
@@ -658,7 +755,10 @@ Không thay đổi cấu trúc JSON sau:
       "title": "Tên công việc/hoạt động",
       "instruction": "Mô tả chi tiết cần làm",
       "priority": "Bình thường",
-      "hasLoudAlarm": ${if (isCooking) "true" else "false"}
+      "hasLoudAlarm": ${if (isCooking) "true" else "false"},
+      "actionType": "",
+      "targetPackageName": "",
+      "targetAppName": ""
     }
   ]
 }
@@ -668,10 +768,8 @@ Quy tắc bắt buộc:
 
 1. "timeScheduled" phải là giờ 24h dạng HH:mm.
 2. Các bước phải được sắp xếp theo thứ tự thời gian tăng dần.
-3. "priority" chỉ được dùng một trong:
-   - "Cao"
-   - "Bình thường"
-   - "Thấp"
+3. "priority" chỉ được dùng một trong: "Cao", "Bình thường", "Thấp".
+4. "actionType": Để trống "" nếu là nhắc việc thông thường, hoặc một trong: "OPEN_APP" (cần điền targetPackageName và targetAppName), "LOCK_SCREEN" (khóa máy đi ngủ), "SILENT_MODE" (im lặng), "VIBRATE_MODE" (rung), "NORMAL_SOUND" (bật chuông), "BLUETOOTH_ON", "BLUETOOTH_OFF", "WIFI_PANEL", "MOBILE_DATA_PANEL".
 4. "hasLoudAlarm":
    - true nếu là việc cần chuông lớn để tránh bỏ lỡ hoặc cần chú ý ngay.
    - false đối với lịch đi chơi, tham quan, ăn uống và các hoạt động thông thường.
@@ -737,6 +835,14 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                 val instr = sObj.optString("instruction", "")
                 val priority = sObj.optString("priority", "Bình thường")
                 val hasLoudAlarm = sObj.optBoolean("hasLoudAlarm", false)
+                val rawAction = sObj.optString("actionType", "")
+                val rawPkg = sObj.optString("targetPackageName", "")
+                val rawApp = sObj.optString("targetAppName", "")
+                val (effAction, effPkg, effApp) = if (rawAction.isNotBlank() && rawAction != "NONE") {
+                    Triple(rawAction, rawPkg, rawApp)
+                } else {
+                    detectAutomationAction(stepTitle, instr, rawText)
+                }
 
                 stepsList.add(
                     AiScheduleStep(
@@ -744,7 +850,10 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                         title = stepTitle,
                         instruction = instr,
                         priority = priority,
-                        hasLoudAlarm = hasLoudAlarm
+                        hasLoudAlarm = hasLoudAlarm,
+                        actionType = effAction,
+                        targetPackageName = effPkg,
+                        targetAppName = effApp
                     )
                 )
             }
@@ -783,13 +892,18 @@ Tôi muốn có thể copy nguyên khối JSON và dán trực tiếp vào app m
                 val instr = if (parts.size > 1) parts.drop(1).joinToString(" - ").trim() else ""
                 val isCooking = line.lowercase().let { it.contains("cá") || it.contains("nấu") || it.contains("kho") }
 
+                val (effAction, effPkg, effApp) = detectAutomationAction(title, instr, line)
+
                 steps.add(
                     AiScheduleStep(
                         timeScheduled = normalizedTime,
                         title = title.ifBlank { "Hoạt động" },
                         instruction = instr,
                         priority = "Bình thường",
-                        hasLoudAlarm = isCooking
+                        hasLoudAlarm = isCooking,
+                        actionType = effAction,
+                        targetPackageName = effPkg,
+                        targetAppName = effApp
                     )
                 )
             }

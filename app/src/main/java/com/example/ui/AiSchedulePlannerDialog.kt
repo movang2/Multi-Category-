@@ -78,6 +78,12 @@ fun AiSchedulePlannerDialog(
     var planToCreateStation by remember { mutableStateOf<AiSchedulePlan?>(null) }
     var newStationCustomName by remember { mutableStateOf("") }
 
+    // Dialog to add plan to an existing station
+    var planToAddToStation by remember { mutableStateOf<AiSchedulePlan?>(null) }
+
+    val installedApps = remember { viewModel.getInstalledApps(context) }
+    var showAppPickerForChat by remember { mutableStateOf(false) }
+
     var imeBottomPx by remember { mutableStateOf(0) }
     var navBarsBottomPx by remember { mutableStateOf(0) }
 
@@ -376,7 +382,98 @@ fun AiSchedulePlannerDialog(
                                         }
                                     }
 
-                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    // Quick Automation Insertion Chips
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        contentPadding = PaddingValues(bottom = 2.dp)
+                                    ) {
+                                        item {
+                                            FilterChip(
+                                                selected = false,
+                                                onClick = { showAppPickerForChat = true },
+                                                leadingIcon = { Text("📱", fontSize = 12.sp) },
+                                                label = { Text("Chọn App", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                                                    labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "khóa máy đi ngủ"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("🌙", fontSize = 11.sp) },
+                                                label = { Text("Khóa máy", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "tắt âm thanh (im lặng)"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("🔇", fontSize = 11.sp) },
+                                                label = { Text("Im lặng", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "bật chế độ rung"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("📳", fontSize = 11.sp) },
+                                                label = { Text("Bật rung", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "bật chuông bình thường"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("🔔", fontSize = 11.sp) },
+                                                label = { Text("Bật chuông", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "bật/tắt Bluetooth"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("🔵", fontSize = 11.sp) },
+                                                label = { Text("Bluetooth", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "bật/tắt Wi-Fi & 4G/5G"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("📶", fontSize = 11.sp) },
+                                                label = { Text("Wi-Fi / 4G", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "chuông báo to (kho cá/việc gấp)"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("⏰", fontSize = 11.sp) },
+                                                label = { Text("Chuông to", fontSize = 11.sp) }
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(3.dp))
 
                                     // Quick suggestion chips
                                     LazyRow(
@@ -419,7 +516,7 @@ fun AiSchedulePlannerDialog(
                             .fillMaxSize()
                             .padding(padding)
                             .padding(horizontal = 12.dp),
-                        contentPadding = PaddingValues(top = 8.dp, bottom = maxOf(navBarsBottom + 16.dp, 32.dp)),
+                        contentPadding = PaddingValues(top = 8.dp, bottom = maxOf(navBarsBottom + 36.dp, 56.dp)),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                     items(chatMessages.size) { index ->
@@ -516,6 +613,9 @@ fun AiSchedulePlannerDialog(
                                 planToCreateStation = plan
                                 newStationCustomName = plan.suggestedStationName
                             },
+                            onAddToExistingStation = { plan ->
+                                planToAddToStation = plan
+                            },
                             onApplyRotationPlan = { rotPlan ->
                                 viewModel.applyRotationPlanFromAi(context, rotPlan)
                                 onDismiss()
@@ -587,6 +687,7 @@ fun AiSchedulePlannerDialog(
     editingStepPlanIndex?.let { (msgIdx, step) ->
         EditAiStepDialog(
             initialStep = step,
+            installedApps = installedApps,
             onDismiss = { editingStepPlanIndex = null },
             onSave = { updatedStep ->
                 val message = chatMessages.getOrNull(msgIdx)
@@ -614,6 +715,7 @@ fun AiSchedulePlannerDialog(
                 instruction = "",
                 priority = "Bình thường"
             ),
+            installedApps = installedApps,
             isNewStep = true,
             onDismiss = { showAddStepPlanIndex = null },
             onSave = { newStep ->
@@ -629,6 +731,18 @@ fun AiSchedulePlannerDialog(
                 }
                 showAddStepPlanIndex = null
                 Toast.makeText(context, "Đã thêm bước mới", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    if (showAppPickerForChat) {
+        AppPickerDialog(
+            installedApps = installedApps,
+            onDismiss = { showAppPickerForChat = false },
+            onSelectApp = { app ->
+                val appTag = "[Mở app: ${app.appName} (${app.packageName})]"
+                inputPrompt = if (inputPrompt.isBlank()) "Lập lịch tự động $appTag" else "$inputPrompt $appTag"
+                showAppPickerForChat = false
             }
         )
     }
@@ -846,6 +960,185 @@ fun AiSchedulePlannerDialog(
             }
         )
     }
+
+    // Dialog to add plan to an existing station
+    planToAddToStation?.let { plan ->
+        val stations by viewModel.allShiftStations.collectAsState()
+        var selectedStationId by remember(plan, stations) {
+            mutableStateOf(currentStation?.id ?: stations.firstOrNull()?.id ?: "")
+        }
+        var startImmediately by remember { mutableStateOf(false) }
+        var alignStartToNow by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { planToAddToStation = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.PlaylistAdd,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Thêm vào ca làm đã tạo", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Chọn ca làm bạn muốn thêm ${plan.steps.size} bước của '${plan.title}':",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (stations.isEmpty()) {
+                        Text(
+                            text = "Chưa có ca làm nào trong ứng dụng. Hãy chọn 'Tạo vị trí mới' để tạo ca làm.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            stations.forEach { st ->
+                                val isSelected = st.id == selectedStationId
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    border = BorderStroke(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { selectedStationId = st.id }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(st.icon, fontSize = 18.sp)
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                text = st.name,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                fontSize = 14.sp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        if (isSelected) {
+                                            Icon(
+                                                Icons.Default.CheckCircle,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { alignStartToNow = !alignStartToNow }
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Checkbox(
+                                checked = alignStartToNow,
+                                onCheckedChange = { alignStartToNow = it }
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "⚡ Căn chỉnh mốc giờ bắt đầu từ BÂY GIỜ",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { startImmediately = !startImmediately }
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Checkbox(
+                                checked = startImmediately,
+                                onCheckedChange = { startImmediately = it }
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Bắt đầu ca ngay và hẹn giờ chuông báo",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (stations.isNotEmpty()) {
+                    Button(
+                        onClick = {
+                            val targetStation = stations.find { it.id == selectedStationId } ?: stations.first()
+                            val nowStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Calendar.getInstance().time)
+                            val finalSteps = if (alignStartToNow) viewModel.shiftAiPlanSteps(plan.steps, nowStr) else plan.steps
+                            viewModel.applyAiScheduleToStation(
+                                context = context,
+                                stationId = targetStation.id,
+                                steps = finalSteps,
+                                startShiftImmediately = startImmediately
+                            )
+                            planToAddToStation = null
+                            if (startImmediately) {
+                                Toast.makeText(
+                                    context,
+                                    "Đã thêm vào ca '${targetStation.name}' và BẮT ĐẦU CA!",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                onScheduleAppliedAndStarted()
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    "Đã thêm ${finalSteps.size} công việc vào ca '${targetStation.name}'!",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                onDismiss()
+                            }
+                        }
+                    ) {
+                        Text("Thêm vào ca")
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            val currentPlan = plan
+                            planToAddToStation = null
+                            planToCreateStation = currentPlan
+                            newStationCustomName = currentPlan.suggestedStationName
+                        }
+                    ) {
+                        Text("Tạo vị trí mới")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { planToAddToStation = null }) {
+                    Text("Hủy")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -861,6 +1154,7 @@ fun ChatMessageItem(
     onToggleAllPlanLoudAlarm: (Boolean) -> Unit,
     onApplyToCurrentStation: (startShiftNow: Boolean) -> Unit,
     onCreateNewStation: (AiSchedulePlan) -> Unit,
+    onAddToExistingStation: (AiSchedulePlan) -> Unit,
     onApplyRotationPlan: ((com.example.ai.AiRotationPlan) -> Unit)? = null
 ) {
     if (message.isUser) {
@@ -1064,6 +1358,62 @@ fun ChatMessageItem(
                             }
                         }
 
+                        // 2 NÚT HÀNH ĐỘNG ĐƯỢC ĐƯA LÊN ĐẦU PHẦN TRẢ LỜI CỦA AI (TRÁNH BỊ THANH ĐIỀU HƯỚNG DƯỚI CÙNG CHE KHUẤT)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // 1. NÚT ƯU TIÊN VÀ NỔI BẬT NHẤT: TẠO VỊ TRÍ MỚI
+                            Button(
+                                onClick = { onCreateNewStation(plan) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .testTag("create_new_station_button"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+                            ) {
+                                Icon(Icons.Default.AddBusiness, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Tạo vị trí mới", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+
+                            // 2. NÚT THÊM VÀO CA LÀM ĐÃ TẠO
+                            OutlinedButton(
+                                onClick = { onAddToExistingStation(plan) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(40.dp)
+                                    .testTag("add_to_existing_station_button"),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Icon(Icons.Default.PlaylistAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Thêm vào ca đã tạo", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "Danh sách các bước (${plan.steps.size}):",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
                         // Timeline of steps
                         plan.steps.forEachIndexed { idx, step ->
                             AiStepCard(
@@ -1088,22 +1438,6 @@ fun ChatMessageItem(
                             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("+ Thêm bước thủ công", fontSize = 12.sp)
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-
-                        // Action CTA: Chỉ giữ nút Tạo vị trí mới
-                        Button(
-                            onClick = { onCreateNewStation(plan) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("create_new_station_button"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Icon(Icons.Default.AddBusiness, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Tạo vị trí mới", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
                     }
                 }
@@ -1359,6 +1693,51 @@ fun AiStepCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+
+                if (step.actionType.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    val actionIcon = when (step.actionType) {
+                        "OPEN_APP" -> "📱"
+                        "LOCK_SCREEN" -> "🌙"
+                        "SILENT_MODE" -> "🔇"
+                        "VIBRATE_MODE" -> "📳"
+                        "NORMAL_SOUND" -> "🔔"
+                        "BLUETOOTH_ON", "BLUETOOTH_OFF" -> "🔵"
+                        "WIFI_PANEL" -> "📶"
+                        "MOBILE_DATA_PANEL" -> "🌐"
+                        else -> "⚡"
+                    }
+                    val actionLabel = when (step.actionType) {
+                        "OPEN_APP" -> "Tự mở: ${step.targetAppName.ifBlank { "Ứng dụng" }}"
+                        "LOCK_SCREEN" -> "Khóa máy & Đi ngủ"
+                        "SILENT_MODE" -> "Tắt âm thanh (Im lặng)"
+                        "VIBRATE_MODE" -> "Bật chế độ Rung"
+                        "NORMAL_SOUND" -> "Bật chuông bình thường"
+                        "BLUETOOTH_ON" -> "Bật Bluetooth"
+                        "BLUETOOTH_OFF" -> "Tắt Bluetooth"
+                        "WIFI_PANEL" -> "Bật/Tắt Wi-Fi"
+                        "MOBILE_DATA_PANEL" -> "Mạng 4G/5G"
+                        else -> "Tác vụ tự động"
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                        ) {
+                            Text(actionIcon, fontSize = 10.sp)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = actionLabel,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
             }
 
             // Edit & Delete icons
@@ -1392,6 +1771,7 @@ fun AiStepCard(
 @Composable
 fun EditAiStepDialog(
     initialStep: AiScheduleStep,
+    installedApps: List<com.example.ui.InstalledAppItem> = emptyList(),
     isNewStep: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (AiScheduleStep) -> Unit
@@ -1401,6 +1781,10 @@ fun EditAiStepDialog(
     var instruction by remember { mutableStateOf(initialStep.instruction) }
     var priority by remember { mutableStateOf(initialStep.priority) }
     var hasLoudAlarm by remember { mutableStateOf(initialStep.hasLoudAlarm) }
+    var actionType by remember { mutableStateOf(initialStep.actionType) }
+    var targetPackageName by remember { mutableStateOf(initialStep.targetPackageName) }
+    var targetAppName by remember { mutableStateOf(initialStep.targetAppName) }
+    var showAppPickerInEdit by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1413,7 +1797,9 @@ fun EditAiStepDialog(
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedTextField(
@@ -1492,6 +1878,76 @@ fun EditAiStepDialog(
                         )
                     }
                 }
+
+                // Automation Action Selection
+                Text(
+                    text = "⚡ Tác vụ tự động khi đến giờ:",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val actions = listOf(
+                        "" to "Chỉ nhắc việc",
+                        "OPEN_APP" to "📱 Hẹn mở app",
+                        "LOCK_SCREEN" to "🌙 Khóa máy (Đi ngủ)",
+                        "SILENT_MODE" to "🔇 Im lặng",
+                        "VIBRATE_MODE" to "📳 Bật rung",
+                        "NORMAL_SOUND" to "🔔 Bật chuông",
+                        "BLUETOOTH_ON" to "🔵 Bật Bluetooth",
+                        "BLUETOOTH_OFF" to "🔵 Tắt Bluetooth",
+                        "WIFI_PANEL" to "📶 Bật/Tắt Wi-Fi",
+                        "MOBILE_DATA_PANEL" to "🌐 Mạng 4G/5G"
+                    )
+                    items(actions) { (type, label) ->
+                        FilterChip(
+                            selected = actionType == type,
+                            onClick = {
+                                actionType = type
+                                if (type == "OPEN_APP" && targetPackageName.isBlank()) {
+                                    showAppPickerInEdit = true
+                                }
+                            },
+                            label = { Text(label, fontSize = 11.sp) }
+                        )
+                    }
+                }
+
+                if (actionType == "OPEN_APP") {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showAppPickerInEdit = true }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Text("📱", fontSize = 18.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (targetAppName.isNotBlank()) "Mở app: $targetAppName" else "Chưa chọn ứng dụng",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = if (targetPackageName.isNotBlank()) targetPackageName else "Nhấn vào đây để chọn ứng dụng đã cài",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(onClick = { showAppPickerInEdit = true }) {
+                                Text("Đổi app", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -1504,7 +1960,10 @@ fun EditAiStepDialog(
                                 title = title.trim(),
                                 instruction = instruction.trim(),
                                 priority = priority,
-                                hasLoudAlarm = hasLoudAlarm
+                                hasLoudAlarm = hasLoudAlarm,
+                                actionType = actionType,
+                                targetPackageName = targetPackageName,
+                                targetAppName = targetAppName
                             )
                         )
                     }
@@ -1520,6 +1979,18 @@ fun EditAiStepDialog(
             }
         }
     )
+
+    if (showAppPickerInEdit) {
+        AppPickerDialog(
+            installedApps = installedApps,
+            onDismiss = { showAppPickerInEdit = false },
+            onSelectApp = { app ->
+                targetPackageName = app.packageName
+                targetAppName = app.appName
+                showAppPickerInEdit = false
+            }
+        )
+    }
 }
 
 @Composable

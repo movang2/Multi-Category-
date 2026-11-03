@@ -160,21 +160,11 @@ object ShiftRotationManager {
 
     fun createDefault2WeekConfig(anchorMonday: Long): ShiftRotationConfig {
         val assignments = mutableListOf<ShiftDayAssignment>()
-
-        // Tuần 1 (weekIndex = 0): T2-T6 = "ca ngày", T7-CN = "ngày nghỉ"
-        for (day in 1..5) {
-            assignments.add(ShiftDayAssignment(0, day, null, "ca ngày"))
+        for (w in 0..1) {
+            for (day in 1..7) {
+                assignments.add(ShiftDayAssignment(w, day, null, "Nghỉ"))
+            }
         }
-        assignments.add(ShiftDayAssignment(0, 6, null, "ngày nghỉ"))
-        assignments.add(ShiftDayAssignment(0, 7, null, "ngày nghỉ"))
-
-        // Tuần 2 (weekIndex = 1): T2-T6 = "ca đêm", T7-CN = "ngày nghỉ"
-        for (day in 1..5) {
-            assignments.add(ShiftDayAssignment(1, day, null, "ca đêm"))
-        }
-        assignments.add(ShiftDayAssignment(1, 6, null, "ngày nghỉ"))
-        assignments.add(ShiftDayAssignment(1, 7, null, "ngày nghỉ"))
-
         return ShiftRotationConfig(
             isEnabled = false,
             cycleWeeks = 2,
@@ -270,16 +260,23 @@ object ShiftRotationManager {
         val db = AppDatabase.getDatabase(context)
         val stations = db.shiftDao().getAllStationsDirect()
 
-        // Match station by ID or by name
-        val matchedStation = stations.find { it.id == assignment.stationId }
-            ?: stations.find {
-                it.name.trim().equals(assignment.targetStationName.trim(), ignoreCase = true)
-            }
-            ?: stations.find {
-                val sName = it.name.lowercase(Locale.getDefault())
-                val tName = assignment.targetStationName.lowercase(Locale.getDefault())
-                sName.contains(tName) || tName.contains(sName)
-            }
+        // Match station by ID or by exact name
+        val isExplicitOff = assignment.stationId == null && assignment.targetStationName.trim().equals("Nghỉ", ignoreCase = true)
+        val matchedStation = if (isExplicitOff) {
+            null
+        } else {
+            stations.find { it.id == assignment.stationId }
+                ?: stations.find {
+                    it.name.trim().equals(assignment.targetStationName.trim(), ignoreCase = true)
+                }
+                ?: if (!assignment.targetStationName.trim().equals("Nghỉ", ignoreCase = true)) {
+                    stations.find {
+                        val sName = it.name.lowercase(Locale.getDefault())
+                        val tName = assignment.targetStationName.lowercase(Locale.getDefault())
+                        sName.contains(tName) || tName.contains(sName)
+                    }
+                } else null
+        }
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -311,12 +308,13 @@ object ShiftRotationManager {
                 scheduleTaskAlarmDirect(context, task)
             }
 
-            val msg = "Hôm nay là $dayName (Tuần ${currentWeek + 1}): Đã tự động kích hoạt ca '${matchedStation.name}'"
+            val cleanStationName = ReminderReceiver.cleanNotificationText(matchedStation.name)
+            val msg = "Hôm nay là $dayName (Tuần ${currentWeek + 1}): Đã tự động kích hoạt ca '$cleanStationName'"
 
             if (config.notifyOnSwitch) {
                 sendRotationNotification(
                     context,
-                    title = "🔄 Chu kỳ ca: Bắt đầu ca hôm nay",
+                    title = "Chu kỳ ca: Bắt đầu ca hôm nay",
                     message = msg
                 )
             }
@@ -326,8 +324,32 @@ object ShiftRotationManager {
 
             return@withContext Pair<ShiftStation?, String>(matchedStation, msg)
         } else {
-            // No matching station found or it's a completely free day
-            val msg = "Hôm nay là $dayName (Tuần ${currentWeek + 1}): ${assignment.targetStationName.ifBlank { "Không có ca" }}"
+            // "Nghỉ" or no station matched -> Stop any currently active shifts so alarms do not ring on days off
+            val oldStartedIds = prefs.getStringSet("started_station_ids", emptySet()) ?: emptySet()
+            if (oldStartedIds.isNotEmpty()) {
+                val allTasks = db.shiftDao().getAllTasksDirect()
+                oldStartedIds.forEach { oldStationId ->
+                    val oldTasks = allTasks.filter { it.stationId == oldStationId }
+                    oldTasks.forEach { task ->
+                        cancelTaskAlarmDirect(context, task)
+                    }
+                }
+                prefs.edit()
+                    .putStringSet("started_station_ids", emptySet())
+                    .putBoolean("is_shift_started", false)
+                    .apply()
+            }
+
+            val isOff = assignment.stationId == null || assignment.targetStationName.trim().equals("nghỉ", ignoreCase = true)
+            val cleanTargetName = ReminderReceiver.cleanNotificationText(assignment.targetStationName)
+            val msg = "Hôm nay là $dayName (Tuần ${currentWeek + 1}): ${if (isOff) "Nghỉ ngơi" else cleanTargetName.ifBlank { "Nghỉ ngơi" }}"
+            if (config.notifyOnSwitch) {
+                sendRotationNotification(
+                    context,
+                    title = "Chu kỳ ca: Ngày nghỉ",
+                    message = msg
+                )
+            }
             scheduleNextRotationAlarm(context, config.switchTimeStr)
             return@withContext Pair<ShiftStation?, String>(null, msg)
         }
@@ -365,11 +387,14 @@ object ShiftRotationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val cleanT = ReminderReceiver.cleanNotificationText(title)
+        val cleanM = ReminderReceiver.cleanNotificationText(message)
+
         val notification = NotificationCompat.Builder(context, ROTATION_NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setContentTitle(cleanT)
+            .setContentText(cleanM)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(cleanM))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

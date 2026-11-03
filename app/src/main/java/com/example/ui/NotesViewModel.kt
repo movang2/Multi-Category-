@@ -75,12 +75,11 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
     init {
         viewModelScope.launch {
             try {
-                repository.removeLegacySampleData()
-                val existing = repository.getAllShiftStationsDirect()
-                if (existing.isEmpty()) {
-                    repository.seedDefaultShiftDataIfEmpty(false)
+                val cleanedUpDefaultSamples = prefs?.getBoolean("has_removed_default_samples_v2", false) ?: false
+                if (!cleanedUpDefaultSamples) {
+                    repository.removeDefaultSampleStations()
+                    prefs?.edit()?.putBoolean("has_removed_default_samples_v2", true)?.apply()
                 }
-                prefs?.edit()?.putBoolean("has_seeded_shift_data_v3", true)?.apply()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -1150,7 +1149,10 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
                     priority = step.priority,
                     requiresConfirmation = false,
                     isCompleted = false,
-                    hasLoudAlarm = step.hasLoudAlarm
+                    hasLoudAlarm = step.hasLoudAlarm,
+                    actionType = step.actionType,
+                    targetPackageName = step.targetPackageName,
+                    targetAppName = step.targetAppName
                 )
                 repository.insertTask(task)
             }
@@ -1199,7 +1201,10 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
                     priority = step.priority,
                     requiresConfirmation = false,
                     isCompleted = false,
-                    hasLoudAlarm = step.hasLoudAlarm
+                    hasLoudAlarm = step.hasLoudAlarm,
+                    actionType = step.actionType,
+                    targetPackageName = step.targetPackageName,
+                    targetAppName = step.targetAppName
                 )
                 repository.insertTask(task)
             }

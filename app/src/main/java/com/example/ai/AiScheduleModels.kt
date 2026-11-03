@@ -8,7 +8,10 @@ data class AiScheduleStep(
     var title: String = "",
     var instruction: String = "",
     var priority: String = "Bình thường", // "Cao", "Bình thường", "Thấp"
-    var hasLoudAlarm: Boolean = false // Chuông báo thức kêu to (kho cá, việc khẩn cấp)
+    var hasLoudAlarm: Boolean = false, // Chuông báo thức kêu to (kho cá, việc khẩn cấp)
+    var actionType: String = "", // "", "OPEN_APP", "LOCK_SCREEN", "SILENT_MODE", "VIBRATE_MODE", "NORMAL_SOUND", "BLUETOOTH_ON", "BLUETOOTH_OFF", "WIFI_PANEL", "MOBILE_DATA_PANEL"
+    var targetPackageName: String = "",
+    var targetAppName: String = ""
 )
 
 data class AiSchedulePlan(
