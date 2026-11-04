@@ -287,10 +287,30 @@ class AiScheduleService {
                             detectAutomationAction(stepTitle, instr, prompt)
                         }
 
+                        val cleanStepTitle = stepTitle
+                            .replace(Regex("""\[ACTION:[A-Za-z0-9_]+\]""", RegexOption.IGNORE_CASE), "")
+                            .replace(Regex("""\[Mở app:[^\]]+\]""", RegexOption.IGNORE_CASE), "")
+                            .trim()
+                            .trim(',', '.', ';', ':', '-', ' ')
+                            .ifBlank {
+                                when (effAction) {
+                                    "LOCK_SCREEN" -> "Khóa máy đi ngủ"
+                                    "SILENT_MODE" -> "Tắt âm thanh (Im lặng)"
+                                    "VIBRATE_MODE" -> "Chế độ Rung"
+                                    "NORMAL_SOUND" -> "Bật lại chuông"
+                                    "BLUETOOTH_ON" -> "Bật Bluetooth"
+                                    "BLUETOOTH_OFF" -> "Tắt Bluetooth"
+                                    "WIFI_PANEL" -> "Bật/Tắt Wi-Fi"
+                                    "MOBILE_DATA_PANEL" -> "Bật/Tắt 4G/5G"
+                                    "OPEN_APP" -> if (effApp.isNotBlank()) "Mở $effApp" else "Mở ứng dụng"
+                                    else -> stepTitle
+                                }
+                            }
+
                         stepsList.add(
                             AiScheduleStep(
                                 timeScheduled = normalizeTime(time),
-                                title = stepTitle,
+                                title = cleanStepTitle,
                                 instruction = instr,
                                 priority = priority,
                                 hasLoudAlarm = hasLoudAlarm,
@@ -321,12 +341,13 @@ class AiScheduleService {
     }
 
     private fun normalizeTime(timeStr: String): String {
-        val clean = timeStr.trim().replace("h", ":").replace(".", ":").replace("-", ":")
-        val parts = clean.split(":")
-        if (parts.size >= 2) {
-            val h = parts[0].trim().toIntOrNull() ?: 8
-            val m = parts[1].trim().toIntOrNull() ?: 0
-            return String.format(Locale.getDefault(), "%02d:%02d", h.coerceIn(0, 23), m.coerceIn(0, 59))
+        val parsedList = com.example.utils.ShiftAlarmHelper.parseMultipleTimes(timeStr)
+        if (parsedList.isNotEmpty()) {
+            return parsedList.joinToString(", ")
+        }
+        val parsed = com.example.utils.ShiftAlarmHelper.parseHourMinute(timeStr)
+        if (parsed != null) {
+            return String.format(Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second)
         }
         return "08:00"
     }
@@ -343,11 +364,24 @@ class AiScheduleService {
      */
     fun detectAutomationAction(
         title: String,
-        instruction: String,
+        instruction: String = "",
         fullPrompt: String = ""
     ): Triple<String, String, String> { // actionType, targetPackageName, targetAppName
         val combined = "$title $instruction $fullPrompt"
         val lower = combined.lowercase(Locale.getDefault())
+
+        // 0. Kiểm tra cú pháp tag mã định danh tiếng Anh chuẩn: [ACTION:LOCK_SCREEN], [ACTION:SILENT_MODE], v.v.
+        val actionCodeRegex = """\[ACTION:([A-Za-z0-9_]+)\]""".toRegex(RegexOption.IGNORE_CASE)
+        val actionCodeMatch = actionCodeRegex.find(combined)
+        if (actionCodeMatch != null) {
+            val code = actionCodeMatch.groupValues[1].uppercase(Locale.getDefault())
+            when (code) {
+                "LOCK_SCREEN", "SILENT_MODE", "VIBRATE_MODE", "NORMAL_SOUND",
+                "BLUETOOTH_ON", "BLUETOOTH_OFF", "WIFI_PANEL", "MOBILE_DATA_PANEL" -> {
+                    return Triple(code, "", "")
+                }
+            }
+        }
 
         // 1. Kiểm tra cú pháp tag: [Mở app: AppName (com.package.name)]
         val openAppTagRegex = """\[Mở app:\s*([^()]+?)\s*\(([^()]+?)\)\]""".toRegex(RegexOption.IGNORE_CASE)
@@ -408,6 +442,217 @@ class AiScheduleService {
     }
 
     /**
+     * Trích xuất chính xác các mốc thời gian và hành động tự động hóa mà người dùng trực tiếp yêu cầu.
+     * Hỗ trợ cú pháp phân cách bằng dấu phẩy, chấm phẩy, xuống dòng hoặc từ nối ('khóa máy đi ngủ lúc 22h30, tắt âm lúc 22h10, bật bluetooth lúc 10h11').
+     */
+    fun extractUserSpecifiedTasks(prompt: String): List<AiScheduleStep> {
+        val cleanPrompt = prompt.trim()
+        if (cleanPrompt.isBlank()) return emptyList()
+
+        val allPromptTimes = com.example.utils.ShiftAlarmHelper.parseMultipleTimes(cleanPrompt)
+        val (detectedAction, detectedPkg, detectedApp) = detectAutomationAction(cleanPrompt)
+
+        // KIỂM TRA TRƯỜNG HỢP ĐẶC BIỆT: Toàn bộ yêu cầu là 1 công việc duy nhất lặp lại ở nhiều khung thời gian!
+        // Ví dụ: "Kiểm tra que hàn lúc 7h30, 9h20, 10h11, 12h18" hoặc "Hẹn mở Smart Dict lúc 7:30, 9:20, 10:11, 12:18"
+        if (allPromptTimes.size >= 2) {
+            val textWithoutTimes = cleanPrompt
+                .replace(Regex("""(?i)\b([0-1]?[0-9]|2[0-3])\s*(?:[:\.]\s*([0-5]?[0-9])|(?:[hHgG]|giờ)\s*([0-5]?[0-9])?)\b"""), "")
+                .replace(Regex("""(?i)\b(?:vào\s+)?lúc\s*"""), "")
+                .replace(Regex("""\[ACTION:[A-Za-z0-9_]+\]""", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("""\[Mở app:[^\]]+\]""", RegexOption.IGNORE_CASE), "")
+                .trim(',', '.', ';', ':', '-', ' ', '\t')
+
+            val subTaskDescriptions = textWithoutTimes.split(Regex("[,;|\n\r]+"))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+
+            if (subTaskDescriptions.size <= 1) {
+                // Người dùng chỉ có đúng 1 hành động nhưng muốn đặt ở nhiều khung giờ!
+                val rawTitleText = subTaskDescriptions.firstOrNull() ?: ""
+                val cleanTitle = rawTitleText
+                    .replace(Regex("""(?i)^(?:bước\s*\d+[:.]?|\d+[:.]|-|\*)\s*"""), "")
+                    .trim(',', '.', ';', ':', '-', ' ', '\t')
+
+                val title = if (cleanTitle.isNotBlank()) {
+                    cleanTitle.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
+                } else {
+                    when (detectedAction) {
+                        "LOCK_SCREEN" -> "Khóa máy đi ngủ"
+                        "SILENT_MODE" -> "Tắt âm thanh (Im lặng)"
+                        "VIBRATE_MODE" -> "Chế độ Rung"
+                        "NORMAL_SOUND" -> "Bật lại chuông"
+                        "BLUETOOTH_ON" -> "Bật Bluetooth"
+                        "BLUETOOTH_OFF" -> "Tắt Bluetooth"
+                        "WIFI_PANEL" -> "Bật/Tắt Wi-Fi"
+                        "MOBILE_DATA_PANEL" -> "Bật/Tắt 4G/5G"
+                        "OPEN_APP" -> if (detectedApp.isNotBlank()) "Mở $detectedApp" else "Mở ứng dụng"
+                        else -> "Công việc lặp lại"
+                    }
+                }
+
+                val defaultInstruction = when (detectedAction) {
+                    "LOCK_SCREEN" -> "Khóa màn hình thiết bị và tắt ứng dụng để đi ngủ"
+                    "SILENT_MODE" -> "Chuyển điện thoại về chế độ Im lặng, không làm phiền"
+                    "VIBRATE_MODE" -> "Chuyển điện thoại về chế độ Rung"
+                    "NORMAL_SOUND" -> "Bật lại chuông điện thoại bình thường"
+                    "BLUETOOTH_ON" -> "Tự động kích hoạt kết nối Bluetooth"
+                    "BLUETOOTH_OFF" -> "Tắt kết nối Bluetooth để tiết kiệm pin và bảo mật"
+                    "WIFI_PANEL" -> "Mở bảng điều khiển kết nối Wi-Fi"
+                    "MOBILE_DATA_PANEL" -> "Mở cài đặt dữ liệu di động 4G/5G"
+                    "OPEN_APP" -> if (detectedApp.isNotBlank()) "Tự động mở ứng dụng $detectedApp" else "Tự động mở ứng dụng đã chọn"
+                    else -> "Thực hiện công việc vào các mốc: ${allPromptTimes.joinToString(", ")}"
+                }
+
+                return listOf(
+                    AiScheduleStep(
+                        timeScheduled = allPromptTimes.joinToString(", "),
+                        title = title,
+                        instruction = defaultInstruction,
+                        priority = if (detectedAction == "LOCK_SCREEN" || detectedAction == "SILENT_MODE") "Cao" else "Bình thường",
+                        hasLoudAlarm = false,
+                        actionType = detectedAction,
+                        targetPackageName = detectedPkg,
+                        targetAppName = detectedApp
+                    )
+                )
+            }
+        }
+
+        // 1. Tách các phân đoạn dựa trên dấu phẩy, chấm phẩy, xuống dòng, gạch đầu dòng, từ nối 'và', 'rồi', 'sau đó'
+        val delimitersRegex = Regex("""(?i)(?:[,;|\n\r]+|\s+(?:và|rồi|sau\s+đó)\s+)""")
+        var rawChunks = cleanPrompt.split(delimitersRegex)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        // Biểu thức chính quy phát hiện mốc giờ: ví dụ "22h30", "22:10", "10h11", "lúc 8h", "vào lúc 08:00"
+        val timePattern = Regex("""(?i)(?:(?:vào\s+)?lúc\s*)?(\b\d{1,2})\s*[:hH]\s*(\d{1,2})?\b""")
+
+        // Nếu người dùng không dùng dấu phẩy nhưng viết nhiều mốc giờ liên tiếp (ví dụ: "8h họp 10h uống nước 12h ăn trưa")
+        if (rawChunks.size <= 1) {
+            val matches = timePattern.findAll(cleanPrompt).toList()
+            if (matches.size > 1) {
+                val subChunks = mutableListOf<String>()
+                for (i in matches.indices) {
+                    val start = matches[i].range.first
+                    val end = if (i + 1 < matches.size) matches[i + 1].range.first else cleanPrompt.length
+                    val sub = cleanPrompt.substring(start, end).trim()
+                    if (sub.isNotBlank()) subChunks.add(sub)
+                }
+                if (subChunks.isNotEmpty()) {
+                    rawChunks = subChunks
+                }
+            }
+        }
+
+        val steps = mutableListOf<AiScheduleStep>()
+        for (chunk in rawChunks) {
+            val match = timePattern.find(chunk)
+            val timeScheduled: String
+            val cleanText: String
+
+            if (match != null) {
+                val h = match.groupValues[1].toIntOrNull() ?: continue
+                val m = match.groupValues[2].takeIf { it.isNotBlank() }?.toIntOrNull() ?: 0
+                if (h !in 0..23 || m !in 0..59) continue
+                timeScheduled = String.format(Locale.getDefault(), "%02d:%02d", h, m)
+                // Loại bỏ mốc giờ khỏi nội dung văn bản để lấy tên công việc/hành động
+                cleanText = chunk.removeRange(match.range)
+                    .replace(Regex("""(?i)^(?:bước\s*\d+[:.]?|\d+[:.]|-|\*)\s*"""), "")
+                    .replace(Regex("""\[ACTION:[A-Za-z0-9_]+\]""", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("""\[Mở app:[^\]]+\]""", RegexOption.IGNORE_CASE), "")
+                    .trim()
+                    .trim(',', '.', ';', ':', '-', ' ')
+            } else {
+                // Không có mốc giờ rõ ràng, kiểm tra xem có tác vụ tự động hóa không
+                val (act, _, _) = detectAutomationAction(chunk)
+                if (act.isBlank()) continue
+                timeScheduled = calculateTimeFromNow(15 * (steps.size + 1))
+                cleanText = chunk.replace(Regex("""(?i)^(?:bước\s*\d+[:.]?|\d+[:.]|-|\*)\s*"""), "")
+                    .replace(Regex("""\[ACTION:[A-Za-z0-9_]+\]""", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("""\[Mở app:[^\]]+\]""", RegexOption.IGNORE_CASE), "")
+                    .trim()
+                    .trim(',', '.', ';', ':', '-', ' ')
+            }
+
+            val (actionType, targetPkg, targetAppName) = detectAutomationAction(chunk)
+
+            // Nếu phân đoạn này chỉ là một mốc giờ lẻ (không có mô tả việc riêng) và đã có bước trước:
+            // Tự động gộp mốc giờ này vào bước trước!
+            if (cleanText.isBlank() && actionType.isBlank() && steps.isNotEmpty()) {
+                val prevStep = steps.last()
+                val prevTimes = com.example.utils.ShiftAlarmHelper.parseMultipleTimes(prevStep.timeScheduled)
+                val newTimes = (prevTimes + timeScheduled).distinct().sorted()
+                prevStep.timeScheduled = newTimes.joinToString(", ")
+                continue
+            }
+
+            // Tên tiêu đề công việc
+            val rawTitle = if (cleanText.isNotBlank()) {
+                cleanText.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
+            } else {
+                when (actionType) {
+                    "LOCK_SCREEN" -> "Khóa máy đi ngủ"
+                    "SILENT_MODE" -> "Tắt âm thanh (Im lặng)"
+                    "VIBRATE_MODE" -> "Chế độ Rung"
+                    "NORMAL_SOUND" -> "Bật lại chuông"
+                    "BLUETOOTH_ON" -> "Bật Bluetooth"
+                    "BLUETOOTH_OFF" -> "Tắt Bluetooth"
+                    "WIFI_PANEL" -> "Bật/Tắt Wi-Fi"
+                    "MOBILE_DATA_PANEL" -> "Bật/Tắt 4G/5G"
+                    "OPEN_APP" -> if (targetAppName.isNotBlank()) "Mở $targetAppName" else "Mở ứng dụng"
+                    else -> "Nhiệm vụ $timeScheduled"
+                }
+            }
+
+            val defaultInstruction = when (actionType) {
+                "LOCK_SCREEN" -> "Khóa màn hình thiết bị và tắt ứng dụng để đi ngủ"
+                "SILENT_MODE" -> "Chuyển điện thoại về chế độ Im lặng, không làm phiền"
+                "VIBRATE_MODE" -> "Chuyển điện thoại về chế độ Rung"
+                "NORMAL_SOUND" -> "Bật lại chuông điện thoại bình thường"
+                "BLUETOOTH_ON" -> "Tự động kích hoạt kết nối Bluetooth"
+                "BLUETOOTH_OFF" -> "Tắt kết nối Bluetooth để tiết kiệm pin và bảo mật"
+                "WIFI_PANEL" -> "Mở bảng điều khiển kết nối Wi-Fi"
+                "MOBILE_DATA_PANEL" -> "Mở cài đặt dữ liệu di động 4G/5G"
+                "OPEN_APP" -> if (targetAppName.isNotBlank()) "Tự động mở ứng dụng $targetAppName" else "Tự động mở ứng dụng đã chọn"
+                else -> "Thực hiện theo lịch trình: $rawTitle"
+            }
+
+            steps.add(
+                AiScheduleStep(
+                    timeScheduled = timeScheduled,
+                    title = rawTitle,
+                    instruction = defaultInstruction,
+                    priority = if (actionType == "LOCK_SCREEN" || actionType == "SILENT_MODE") "Cao" else "Bình thường",
+                    hasLoudAlarm = false,
+                    actionType = actionType,
+                    targetPackageName = targetPkg,
+                    targetAppName = targetAppName
+                )
+            )
+        }
+
+        // Gộp các công việc trùng tiêu đề và hành động tự động hóa thành 1 bước duy nhất với nhiều mốc giờ
+        val groupedSteps = mutableListOf<AiScheduleStep>()
+        for (step in steps) {
+            val existing = groupedSteps.find {
+                it.title.equals(step.title, ignoreCase = true) &&
+                it.actionType == step.actionType &&
+                it.targetPackageName == step.targetPackageName
+            }
+            if (existing != null) {
+                val existingTimes = com.example.utils.ShiftAlarmHelper.parseMultipleTimes(existing.timeScheduled)
+                val newTimes = com.example.utils.ShiftAlarmHelper.parseMultipleTimes(step.timeScheduled)
+                val combined = (existingTimes + newTimes).distinct().sorted()
+                existing.timeScheduled = combined.joinToString(", ")
+            } else {
+                groupedSteps.add(step)
+            }
+        }
+
+        return groupedSteps
+    }
+
+    /**
      * Smart local schedule generator when offline or before Gemini API key is configured.
      * Accurately supports recipes (kho cá), day planning (vui chơi, học tập), shifts, and custom activities.
      */
@@ -456,8 +701,42 @@ class AiScheduleService {
             return AiScheduleResponse(msg, null, rotPlan)
         }
 
+        // ƯU TIÊN 1: Trích xuất chính xác các mốc thời gian và hành động tự động mà người dùng đã chỉ định
+        val customSteps = extractUserSpecifiedTasks(prompt)
+        if (customSteps.isNotEmpty()) {
+            val stepsSummary = customSteps.joinToString("\n") { step ->
+                val actionNote = when (step.actionType) {
+                    "LOCK_SCREEN" -> " (🔒 Khóa máy đi ngủ)"
+                    "SILENT_MODE" -> " (🔕 Tắt âm thanh)"
+                    "VIBRATE_MODE" -> " (📳 Bật rung)"
+                    "NORMAL_SOUND" -> " (🔔 Bật chuông)"
+                    "BLUETOOTH_ON" -> " (🔵 Bật Bluetooth)"
+                    "BLUETOOTH_OFF" -> " (⚫ Tắt Bluetooth)"
+                    "WIFI_PANEL" -> " (📶 Bật/Tắt Wi-Fi)"
+                    "MOBILE_DATA_PANEL" -> " (📶 Bật/Tắt 4G/5G)"
+                    "OPEN_APP" -> if (step.targetAppName.isNotBlank()) " (🚀 Mở ${step.targetAppName})" else " (🚀 Mở app)"
+                    else -> ""
+                }
+                "• ${step.timeScheduled}: ${step.title}$actionNote"
+            }
+            val message = """
+                Tôi đã thiết lập chính xác các mốc thời gian và tác vụ theo yêu cầu của bạn:
+                $stepsSummary
+
+                Khi bạn bấm 'Tạo vị trí mới' hoặc 'Thêm vào ca đã tạo', hệ thống sẽ tự động lên lịch và kích hoạt các tác vụ đúng thời gian!
+            """.trimIndent()
+
+            val plan = AiSchedulePlan(
+                title = "Lịch trình tác vụ theo thời gian",
+                suggestedStationName = if (customSteps.any { it.actionType.isNotBlank() }) "Tác vụ tự động ⚡" else "Lịch trình cá nhân ⏱️",
+                suggestedIcon = if (customSteps.any { it.actionType.isNotBlank() }) "⚡" else "⏱️",
+                steps = customSteps
+            )
+            return AiScheduleResponse(message, plan, null)
+        }
+
         return when {
-            p.contains("kho cá") || p.contains("cá") || p.contains("nấu") || p.contains("kho") -> {
+            p.contains("kho cá") || (p.contains("cá") && (p.contains("kho") || p.contains("nấu"))) -> {
                 val t1 = calculateTimeFromNow(5)
                 val t2 = calculateTimeFromNow(20)
                 val t3 = calculateTimeFromNow(35)
@@ -515,7 +794,7 @@ class AiScheduleService {
                 AiScheduleResponse(message, plan, null)
             }
 
-            p.contains("vui chơi") || p.contains("học tập") || p.contains("giải trí") || p.contains("1 ngày") || p.contains("ngày") -> {
+            (p.contains("1 ngày") || p.contains("một ngày") || p.contains("lịch sinh hoạt")) || (p.contains("vui chơi") && p.contains("học tập")) -> {
                 val message = """
                     Tôi đã lên lịch trình cân bằng hoàn hảo cho 1 ngày trọn vẹn: kết hợp giữa năng suất học tập, vận động thể chất và thư giãn giải trí.
                     Các mốc thời gian được phân bổ khoa học để bạn duy trì sự hứng khởi cả ngày!
@@ -579,7 +858,7 @@ class AiScheduleService {
                 AiScheduleResponse(message, plan, null)
             }
 
-            p.contains("ca") || p.contains("làm") || p.contains("máy") || p.contains("trực") || p.contains("bảo dưỡng") -> {
+            (p.contains("vận hành máy") || p.contains("trực máy") || p.contains("bảo dưỡng máy") || (p.contains("ca làm") && (p.contains("xưởng") || p.contains("nhà máy") || p.contains("sản xuất")))) && !p.contains("khóa máy") -> {
                 val message = """
                     Tôi đã chuẩn bị danh mục công việc theo các khung giờ trọng tâm cho ca làm việc vận hành tại vị trí máy.
                     Khi bạn bấm 'Bắt đầu ca', hệ thống sẽ thiết lập chuông nhắc nhở chuẩn xác theo từng mốc kiểm tra.

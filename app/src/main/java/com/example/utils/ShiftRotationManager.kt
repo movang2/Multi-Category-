@@ -397,7 +397,9 @@ object ShiftRotationManager {
             .setStyle(NotificationCompat.BigTextStyle().bigText(cleanM))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setLocalOnly(false)
+            .extend(NotificationCompat.WearableExtender())
             .build()
 
         notificationManager.notify(ROTATION_ALARM_REQUEST_CODE, notification)

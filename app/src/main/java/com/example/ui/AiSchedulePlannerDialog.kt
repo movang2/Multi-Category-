@@ -404,7 +404,7 @@ fun AiSchedulePlannerDialog(
                                         item {
                                             AssistChip(
                                                 onClick = {
-                                                    val toAdd = "khóa máy đi ngủ"
+                                                    val toAdd = "khóa máy đi ngủ [ACTION:LOCK_SCREEN]"
                                                     inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
                                                 },
                                                 leadingIcon = { Text("🌙", fontSize = 11.sp) },
@@ -414,7 +414,7 @@ fun AiSchedulePlannerDialog(
                                         item {
                                             AssistChip(
                                                 onClick = {
-                                                    val toAdd = "tắt âm thanh (im lặng)"
+                                                    val toAdd = "tắt âm thanh [ACTION:SILENT_MODE]"
                                                     inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
                                                 },
                                                 leadingIcon = { Text("🔇", fontSize = 11.sp) },
@@ -424,7 +424,7 @@ fun AiSchedulePlannerDialog(
                                         item {
                                             AssistChip(
                                                 onClick = {
-                                                    val toAdd = "bật chế độ rung"
+                                                    val toAdd = "bật chế độ rung [ACTION:VIBRATE_MODE]"
                                                     inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
                                                 },
                                                 leadingIcon = { Text("📳", fontSize = 11.sp) },
@@ -434,7 +434,7 @@ fun AiSchedulePlannerDialog(
                                         item {
                                             AssistChip(
                                                 onClick = {
-                                                    val toAdd = "bật chuông bình thường"
+                                                    val toAdd = "bật chuông bình thường [ACTION:NORMAL_SOUND]"
                                                     inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
                                                 },
                                                 leadingIcon = { Text("🔔", fontSize = 11.sp) },
@@ -444,21 +444,41 @@ fun AiSchedulePlannerDialog(
                                         item {
                                             AssistChip(
                                                 onClick = {
-                                                    val toAdd = "bật/tắt Bluetooth"
+                                                    val toAdd = "bật Bluetooth [ACTION:BLUETOOTH_ON]"
                                                     inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
                                                 },
                                                 leadingIcon = { Text("🔵", fontSize = 11.sp) },
-                                                label = { Text("Bluetooth", fontSize = 11.sp) }
+                                                label = { Text("Bật Bluetooth", fontSize = 11.sp) }
                                             )
                                         }
                                         item {
                                             AssistChip(
                                                 onClick = {
-                                                    val toAdd = "bật/tắt Wi-Fi & 4G/5G"
+                                                    val toAdd = "tắt Bluetooth [ACTION:BLUETOOTH_OFF]"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("⚪", fontSize = 11.sp) },
+                                                label = { Text("Tắt Bluetooth", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "bật/tắt Wi-Fi [ACTION:WIFI_PANEL]"
                                                     inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
                                                 },
                                                 leadingIcon = { Text("📶", fontSize = 11.sp) },
-                                                label = { Text("Wi-Fi / 4G", fontSize = 11.sp) }
+                                                label = { Text("Wi-Fi", fontSize = 11.sp) }
+                                            )
+                                        }
+                                        item {
+                                            AssistChip(
+                                                onClick = {
+                                                    val toAdd = "dữ liệu 4G/5G [ACTION:MOBILE_DATA_PANEL]"
+                                                    inputPrompt = if (inputPrompt.isBlank()) toAdd else "$inputPrompt, $toAdd"
+                                                },
+                                                leadingIcon = { Text("🌐", fontSize = 11.sp) },
+                                                label = { Text("4G/5G", fontSize = 11.sp) }
                                             )
                                         }
                                         item {
@@ -1805,9 +1825,11 @@ fun EditAiStepDialog(
                 OutlinedTextField(
                     value = timeScheduled,
                     onValueChange = { timeScheduled = it },
-                    label = { Text("Mốc giờ (ví dụ: 08:30 hoặc 14:00)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    label = { Text("Mốc giờ (ví dụ: 08:30 hoặc 7h30, 9h20, 10h11)") },
+                    supportingText = {
+                        Text("Có thể nhập 1 hoặc nhiều mốc giờ (cách nhau bởi dấu phẩy, hỗ trợ cả 'h' và ':')", fontSize = 10.sp)
+                    },
+                    modifier = Modifier.fillMaxWidth()
                 )
 
                 OutlinedTextField(

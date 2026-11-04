@@ -427,7 +427,9 @@ class ReminderReceiver : BroadcastReceiver() {
                     .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setContentIntent(contentPendingIntent)
                     .setAutoCancel(true)
-                    .setOnlyAlertOnce(true)
+                    .setOnlyAlertOnce(false)
+                    .setLocalOnly(false)
+                    .extend(NotificationCompat.WearableExtender())
                     .setTimeoutAfter(70_000L)
                     .addAction(
                         if (effActionType == "OPEN_APP") android.R.drawable.ic_menu_send else android.R.drawable.ic_lock_power_off,
@@ -691,11 +693,15 @@ class ReminderReceiver : BroadcastReceiver() {
             val noteText = if (isShiftTask) {
                 cleanNotificationText(
                     if (effTaskInstruction.isNotBlank()) {
-                        "$effTaskTitle : $effTaskInstruction"
+                        effTaskInstruction
                     } else if (effActionType == "OPEN_APP" && effTargetAppName.isNotBlank()) {
-                        "Đến giờ mở ${effTargetAppName}: $effTaskTitle"
+                        "Đến giờ mở $effTargetAppName ($effTimeScheduled)"
+                    } else if (stationName.isNotBlank() && effTimeScheduled.isNotBlank()) {
+                        "$stationName • Giờ thực hiện: $effTimeScheduled"
+                    } else if (stationName.isNotBlank()) {
+                        "Vị trí: $stationName"
                     } else {
-                        effTaskTitle
+                        "Đến giờ thực hiện ($effTimeScheduled)"
                     }
                 )
             } else {
@@ -790,14 +796,19 @@ class ReminderReceiver : BroadcastReceiver() {
                 pendingIntent
             }
 
-            val displayTitle = if (isShiftTask) {
-                "" // Bỏ tiêu đề in đậm cho thông báo ca làm việc để tránh lặp từ và tối giản nội dung
-            } else if (isQuickNote) {
-                "[GHI CHÚ NHANH] $effTaskTitle"
-            } else if (isRoadmapTask) {
-                cleanNotificationText(categoryName).ifBlank { "Lộ trình" }
-            } else {
-                when (effActionType) {
+            val displayTitle = when {
+                isShiftTask -> {
+                    if (effTaskTitle.isNotBlank()) {
+                        effTaskTitle
+                    } else if (stationName.isNotBlank()) {
+                        "Nhắc việc: $stationName"
+                    } else {
+                        "Nhắc nhở ca làm"
+                    }
+                }
+                isQuickNote -> "[GHI CHÚ NHANH] $effTaskTitle"
+                isRoadmapTask -> cleanNotificationText(categoryName).ifBlank { "Lộ trình" }
+                else -> when (effActionType) {
                     "OPEN_APP" -> if (effTargetAppName.isNotBlank()) "Mở ${cleanNotificationText(effTargetAppName)}" else effTaskTitle
                     "LOCK_SCREEN" -> "Đến giờ đi ngủ"
                     "SILENT_MODE" -> "Chế độ Im lặng"
@@ -811,15 +822,34 @@ class ReminderReceiver : BroadcastReceiver() {
                 }
             }
 
+            val finalTitle = displayTitle.ifBlank {
+                if (effTaskTitle.isNotBlank()) effTaskTitle
+                else if (stationName.isNotBlank()) stationName
+                else "Nhắc nhở ca làm"
+            }
+
             val bigTextStyle = NotificationCompat.BigTextStyle()
-                .bigText(noteText)
-            if (displayTitle.isNotBlank()) {
-                bigTextStyle.setBigContentTitle(displayTitle)
+                .setBigContentTitle(finalTitle)
+                .bigText(
+                    if (isShiftTask && effTaskInstruction.isNotBlank()) {
+                        if (stationName.isNotBlank() && effTimeScheduled.isNotBlank()) {
+                            "$effTaskInstruction\n($stationName • $effTimeScheduled)"
+                        } else {
+                            effTaskInstruction
+                        }
+                    } else {
+                        noteText
+                    }
+                )
+
+            if (stationName.isNotBlank()) {
+                bigTextStyle.setSummaryText(stationName)
             }
 
             val notificationBuilder = NotificationCompat.Builder(context, channelId)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setColor(ContextCompat.getColor(context, R.color.notification_accent))
+                .setContentTitle(finalTitle)
                 .setContentText(noteText)
                 .setStyle(bigTextStyle)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -827,13 +857,11 @@ class ReminderReceiver : BroadcastReceiver() {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setContentIntent(primaryContentIntent)
                 .setAutoCancel(true)
-                .setOnlyAlertOnce(true)
+                .setOnlyAlertOnce(false)
+                .setLocalOnly(false)
+                .extend(NotificationCompat.WearableExtender())
 
-            if (displayTitle.isNotBlank()) {
-                notificationBuilder.setContentTitle(displayTitle)
-            }
-
-            if (!isShiftTask && stationName.isNotBlank()) {
+            if (stationName.isNotBlank()) {
                 notificationBuilder.setSubText(stationName)
             }
 
@@ -1078,11 +1106,14 @@ class ReminderReceiver : BroadcastReceiver() {
                     .setStyle(NotificationCompat.BigTextStyle().bigText(cleanB))
                     .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setCategory(if (hasLoudAlarm) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_REMINDER)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setDefaults(NotificationCompat.DEFAULT_ALL)
                     .setVibrate(if (hasLoudAlarm) longArrayOf(0, 800, 400, 800, 400, 800) else longArrayOf(0, 500, 200, 500))
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
-                    .setOnlyAlertOnce(true)
+                    .setOnlyAlertOnce(false)
+                    .setLocalOnly(false)
+                    .extend(NotificationCompat.WearableExtender())
                     .build()
 
                 notificationManager.notify((System.currentTimeMillis() % 10000).toInt(), notification)

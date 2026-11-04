@@ -15,10 +15,11 @@ class ExampleUnitTest {
     val service = AiScheduleService()
     val (message, plan) = service.generateSmartLocalSchedule("kho cá ngon chuẩn vị")
     assertNotNull(plan)
-    assertTrue(plan.steps.size >= 5)
-    assertTrue(plan.title.contains("Kho cá", ignoreCase = true))
+    val p = plan!!
+    assertTrue(p.steps.size >= 5)
+    assertTrue(p.title.contains("Kho cá", ignoreCase = true))
     // Each step should have a valid time format HH:mm and non-empty title & instructions
-    plan.steps.forEach { step ->
+    p.steps.forEach { step ->
       assertTrue(step.timeScheduled.contains(":"))
       assertTrue(step.title.isNotBlank())
       assertTrue(step.instruction.isNotBlank())
@@ -32,12 +33,42 @@ class ExampleUnitTest {
     val service = AiScheduleService()
     val (message, plan) = service.generateSmartLocalSchedule("Lịch trình 1 ngày vui chơi học tập và giải trí")
     assertNotNull(plan)
-    assertTrue(plan.steps.size >= 6)
-    assertTrue(plan.title.contains("1 ngày", ignoreCase = true) || plan.title.contains("Học tập", ignoreCase = true))
-    val firstStep = plan.steps.first()
+    val p = plan!!
+    assertTrue(p.steps.size >= 6)
+    assertTrue(p.title.contains("1 ngày", ignoreCase = true) || p.title.contains("Học tập", ignoreCase = true))
+    val firstStep = p.steps.first()
     assertEquals("07:00", firstStep.timeScheduled)
     // Regular study/work day should have standard quiet/normal notifications
     assertFalse("Normal day plan should have standard quiet notification", firstStep.hasLoudAlarm)
+  }
+
+  @Test
+  fun testParseMultipleTimesAndFlexibleFormats() {
+    val helper = com.example.utils.ShiftAlarmHelper
+    assertEquals(Pair(7, 30), helper.parseHourMinute("7:30"))
+    assertEquals(Pair(7, 30), helper.parseHourMinute("7h30"))
+    assertEquals(Pair(7, 30), helper.parseHourMinute("7H30"))
+    assertEquals(Pair(7, 0), helper.parseHourMinute("7h"))
+    assertEquals(Pair(22, 15), helper.parseHourMinute("22h15"))
+
+    val multi = helper.parseMultipleTimes("7:30, 9:20, 10:11, 12:18")
+    assertEquals(listOf("07:30", "09:20", "10:11", "12:18"), multi)
+
+    val multiWithH = helper.parseMultipleTimes("7h30, 9h20, 10h11, 12h18")
+    assertEquals(listOf("07:30", "09:20", "10:11", "12:18"), multiWithH)
+  @Test
+  fun testExtractUserSpecifiedTasksWithMultipleTimes() {
+    val service = AiScheduleService()
+    val steps = service.extractUserSpecifiedTasks("Kiểm tra que hàn lúc 7h30, 9h20, 10h11, 12h18")
+    assertEquals(1, steps.size)
+    assertEquals("07:30, 09:20, 10:11, 12:18", steps[0].timeScheduled)
+    assertTrue(steps[0].title.contains("Kiểm tra que hàn", ignoreCase = true))
+
+    val appSteps = service.extractUserSpecifiedTasks("Hẹn mở Smart Dict lúc 7:30, 9:20, 10:11, 12:18 [Mở app: com.aistudio.smartdict.krrd | Smart Dict]")
+    assertEquals(1, appSteps.size)
+    assertEquals("07:30, 09:20, 10:11, 12:18", appSteps[0].timeScheduled)
+    assertEquals("OPEN_APP", appSteps[0].actionType)
+    assertEquals("com.aistudio.smartdict.krrd", appSteps[0].targetPackageName)
   }
 
   @Test

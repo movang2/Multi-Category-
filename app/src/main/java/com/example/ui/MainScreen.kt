@@ -2356,7 +2356,7 @@ fun QuickNotesView(
                     .padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(quickNotes) { note ->
+                items(quickNotes, key = { it.id }) { note ->
                     QuickNoteItemRow(
                         note = note,
                         onTogglePin = { viewModel.togglePinQuickNote(note) },
@@ -2406,17 +2406,22 @@ fun QuickNotesView(
     if (showEditDialog) {
         QuickNoteEditDialog(
             note = noteToEdit,
-            onDismiss = { showEditDialog = false },
+            onDismiss = {
+                showEditDialog = false
+                noteToEdit = null
+            },
             onSave = { text, pinned, hasNotif, reminderTimeMs ->
+                val currentEditId = noteToEdit?.id
                 viewModel.saveQuickNote(
                     context = context,
-                    id = noteToEdit?.id,
+                    id = currentEditId,
                     text = text,
                     pinned = pinned,
                     hasNotification = hasNotif,
                     reminderTime = reminderTimeMs
                 )
                 showEditDialog = false
+                noteToEdit = null
                 if (hasNotif && reminderTimeMs != null) {
                     val sdf = SimpleDateFormat("HH:mm - dd/MM", Locale.getDefault())
                     Toast.makeText(context, "⏰ Đã lưu và hẹn thông báo lúc: ${sdf.format(Date(reminderTimeMs))}", Toast.LENGTH_SHORT).show()

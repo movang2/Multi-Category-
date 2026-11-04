@@ -133,11 +133,8 @@ fun ShiftManagementView(
 
     // Hàm tính chênh lệch phút vòng xoay 24h giữa giờ tác vụ và giờ hiện tại
     fun getMinutesDiff(timeScheduled: String, nowMinutes: Int): Int {
-        val parts = timeScheduled.split(":")
-        if (parts.size != 2) return 0
-        val h = parts[0].trim().toIntOrNull() ?: 0
-        val m = parts[1].trim().toIntOrNull() ?: 0
-        val taskMins = h * 60 + m
+        val parsed = viewModel.parseHourMinute(timeScheduled) ?: return 0
+        val taskMins = parsed.first * 60 + parsed.second
         var diff = taskMins - nowMinutes
         if (diff < -720) diff += 1440
         if (diff > 720) diff -= 1440
@@ -1038,6 +1035,7 @@ fun ShiftManagementView(
                     taskToEdit = null
                 },
                 onSave = { time, title, instruction, priority, reqConf, hasLoudAlarm, isHidden, actionType, targetPackageName, targetAppName ->
+                    val timesCount = viewModel.parseMultipleTimes(time).size.coerceAtLeast(1)
                     viewModel.saveShiftTask(
                         context = context,
                         stationId = currentStation.id,
@@ -1057,7 +1055,14 @@ fun ShiftManagementView(
                     )
                     showAddTaskDialog = false
                     taskToEdit = null
-                    Toast.makeText(context, if (editingTask != null) "Đã cập nhật công việc!" else "Đã lưu công việc!", Toast.LENGTH_SHORT).show()
+                    val toastMsg = if (timesCount > 1) {
+                        "Đã tạo $timesCount mốc giờ cho công việc này!"
+                    } else if (editingTask != null) {
+                        "Đã cập nhật công việc!"
+                    } else {
+                        "Đã lưu công việc!"
+                    }
+                    Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
                 }
             )
         } else {
@@ -1751,14 +1756,21 @@ fun AddShiftTaskDialog(
     var isDndGranted by remember { mutableStateOf(viewModel.isNotificationPolicyAccessGranted(context)) }
 
     fun openTimePickerDialog() {
-        val parsed = time.split(":").mapNotNull { it.trim().toIntOrNull() }
-        val curHour = if (parsed.size >= 2) parsed[0] else Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val curMinute = if (parsed.size >= 2) parsed[1] else Calendar.getInstance().get(Calendar.MINUTE)
+        val parsedTimes = viewModel.parseMultipleTimes(time)
+        val lastTime = parsedTimes.lastOrNull()
+        val parsed = lastTime?.let { viewModel.parseHourMinute(it) } ?: viewModel.parseHourMinute(time)
+        val curHour = parsed?.first ?: Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val curMinute = parsed?.second ?: Calendar.getInstance().get(Calendar.MINUTE)
 
         android.app.TimePickerDialog(
             context,
             { _, hourOfDay, minute ->
-                time = String.format(Locale.getDefault(), "%02d:%02d", hourOfDay, minute)
+                val newPicked = String.format(Locale.getDefault(), "%02d:%02d", hourOfDay, minute)
+                if (time.isNotBlank() && (time.contains(",") || time.contains(";") || parsedTimes.size > 1)) {
+                    time = "$time, $newPicked"
+                } else {
+                    time = newPicked
+                }
             },
             curHour,
             curMinute,
@@ -1792,14 +1804,20 @@ fun AddShiftTaskDialog(
                 OutlinedTextField(
                     value = time,
                     onValueChange = { time = it },
-                    label = { Text("Thời gian (Ví dụ: 08:00, 22:15)") },
+                    label = { Text("Thời gian (Ví dụ: 08:00, 22:15 hoặc 7h30, 9h20)") },
+                    supportingText = {
+                        Text(
+                            "Hỗ trợ cả dấu ':' và chữ 'h' (7:30 hoặc 7h30). Nhập nhiều giờ cách nhau bằng dấu phẩy để tạo thông báo cho từng mốc.",
+                            fontSize = 10.sp,
+                            color = ShiftLightBlue
+                        )
+                    },
                     trailingIcon = {
                         IconButton(onClick = { openTimePickerDialog() }) {
                             Icon(Icons.Default.AccessTime, contentDescription = "Chọn giờ", tint = ShiftLightBlue)
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1811,14 +1829,24 @@ fun AddShiftTaskDialog(
                     SuggestionChip(
                         onClick = {
                             val cal = Calendar.getInstance().apply { add(Calendar.MINUTE, 2) }
-                            time = String.format(Locale.getDefault(), "%02d:%02d", cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
+                            val newT = String.format(Locale.getDefault(), "%02d:%02d", cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
+                            if (time.isNotBlank() && (time.contains(",") || time.contains(";"))) {
+                                time = "$time, $newT"
+                            } else {
+                                time = newT
+                            }
                         },
                         label = { Text("+2 phút", fontSize = 11.sp) }
                     )
                     SuggestionChip(
                         onClick = {
                             val cal = Calendar.getInstance().apply { add(Calendar.MINUTE, 5) }
-                            time = String.format(Locale.getDefault(), "%02d:%02d", cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
+                            val newT = String.format(Locale.getDefault(), "%02d:%02d", cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
+                            if (time.isNotBlank() && (time.contains(",") || time.contains(";"))) {
+                                time = "$time, $newT"
+                            } else {
+                                time = newT
+                            }
                         },
                         label = { Text("+5 phút", fontSize = 11.sp) }
                     )

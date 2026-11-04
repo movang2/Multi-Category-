@@ -22,36 +22,42 @@ class QuickNoteWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        val pendingResult = goAsync()
+        if (appWidgetIds.isEmpty()) return
+        val pendingResult = try {
+            goAsync()
+        } catch (e: Exception) {
+            null
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 for (appWidgetId in appWidgetIds) {
                     updateAppWidget(context, appWidgetManager, appWidgetId)
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
             } finally {
-                pendingResult.finish()
+                try {
+                    pendingResult?.finish()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == AppWidgetManager.ACTION_APPWIDGET_UPDATE) {
+        // If an update intent arrived without explicit EXTRA_APPWIDGET_IDS extras,
+        // query all current widget ids and update them.
+        if (intent.action == AppWidgetManager.ACTION_APPWIDGET_UPDATE &&
+            !intent.hasExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS)) {
             val appWidgetManager = AppWidgetManager.getInstance(context)
             val ids = appWidgetManager.getAppWidgetIds(
                 ComponentName(context, QuickNoteWidgetProvider::class.java)
             )
             if (ids != null && ids.isNotEmpty()) {
-                val pendingResult = goAsync()
-                CoroutineScope(Dispatchers.IO).launch {
-                    try {
-                        for (id in ids) {
-                            updateAppWidget(context, appWidgetManager, id)
-                        }
-                    } finally {
-                        pendingResult.finish()
-                    }
-                }
+                onUpdate(context, appWidgetManager, ids)
             }
         }
     }

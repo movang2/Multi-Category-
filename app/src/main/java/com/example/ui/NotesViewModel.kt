@@ -496,49 +496,57 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
         reminderTime: Long? = null
     ) {
         viewModelScope.launch {
-            val oldNote = id?.let { repository.getQuickNoteById(it) }
-            val qnId = id ?: oldNote?.id ?: java.util.UUID.randomUUID().toString()
+            try {
+                val oldNote = id?.let { repository.getQuickNoteById(it) }
+                val qnId = id ?: oldNote?.id ?: java.util.UUID.randomUUID().toString()
 
-            if (context != null && oldNote != null && oldNote.hasNotification) {
-                cancelQuickNoteAlarm(context, oldNote.id)
-            }
+                if (context != null && oldNote != null && oldNote.hasNotification) {
+                    cancelQuickNoteAlarm(context, oldNote.id)
+                }
 
-            val validReminder = hasNotification && reminderTime != null
-            val isTriggered = if (validReminder && reminderTime != null && reminderTime > System.currentTimeMillis()) {
-                false
-            } else {
-                oldNote?.isNotificationTriggered ?: false
-            }
+                val validReminder = hasNotification && reminderTime != null
+                val isTriggered = if (validReminder && reminderTime != null && reminderTime > System.currentTimeMillis()) {
+                    false
+                } else {
+                    oldNote?.isNotificationTriggered ?: false
+                }
 
-            val quickNote = QuickNote(
-                id = qnId,
-                text = text,
-                pinned = pinned,
-                createdAt = oldNote?.createdAt ?: System.currentTimeMillis(),
-                updatedAt = System.currentTimeMillis(),
-                hasNotification = validReminder,
-                reminderTime = if (validReminder) reminderTime else null,
-                isNotificationTriggered = isTriggered
-            )
-            repository.insertQuickNote(quickNote)
+                val quickNote = QuickNote(
+                    id = qnId,
+                    text = text,
+                    pinned = pinned,
+                    createdAt = oldNote?.createdAt ?: System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis(),
+                    hasNotification = validReminder,
+                    reminderTime = if (validReminder) reminderTime else null,
+                    isNotificationTriggered = isTriggered
+                )
+                repository.insertQuickNote(quickNote)
 
-            if (context != null && validReminder && reminderTime != null && reminderTime > System.currentTimeMillis()) {
-                scheduleQuickNoteAlarm(context, quickNote)
-            }
-            if (context != null) {
-                QuickNoteAlarmHelper.updateWidget(context)
+                if (context != null && validReminder && reminderTime != null && reminderTime > System.currentTimeMillis()) {
+                    scheduleQuickNoteAlarm(context, quickNote)
+                }
+                if (context != null) {
+                    QuickNoteAlarmHelper.updateWidget(context)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
 
     fun deleteQuickNote(context: Context? = null, quickNote: QuickNote) {
         viewModelScope.launch {
-            if (context != null && quickNote.hasNotification) {
-                cancelQuickNoteAlarm(context, quickNote.id)
-            }
-            repository.deleteQuickNote(quickNote)
-            if (context != null) {
-                QuickNoteAlarmHelper.updateWidget(context)
+            try {
+                if (context != null && quickNote.hasNotification) {
+                    cancelQuickNoteAlarm(context, quickNote.id)
+                }
+                repository.deleteQuickNote(quickNote)
+                if (context != null) {
+                    QuickNoteAlarmHelper.updateWidget(context)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
@@ -772,16 +780,11 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
     }
 
     fun parseHourMinute(timeStr: String): Pair<Int, Int>? {
-        val clean = timeStr.trim().replace("h", ":").replace("H", ":").replace(".", ":").replace("-", ":")
-        val parts = clean.split(":")
-        if (parts.size >= 2) {
-            val h = parts[0].trim().toIntOrNull() ?: return null
-            val m = parts[1].trim().toIntOrNull() ?: return null
-            if (h in 0..23 && m in 0..59) {
-                return Pair(h, m)
-            }
-        }
-        return null
+        return com.example.utils.ShiftAlarmHelper.parseHourMinute(timeStr)
+    }
+
+    fun parseMultipleTimes(input: String): List<String> {
+        return com.example.utils.ShiftAlarmHelper.parseMultipleTimes(input)
     }
 
     fun saveShiftTask(
@@ -802,17 +805,22 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
         targetAppName: String = ""
     ) {
         viewModelScope.launch {
-            val parsed = parseHourMinute(timeScheduled)
-            val normalizedTime = if (parsed != null) {
-                String.format(java.util.Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second)
-            } else {
-                timeScheduled.trim()
+            val timeList = parseMultipleTimes(timeScheduled)
+            val times = if (timeList.isNotEmpty()) timeList else {
+                val parsed = parseHourMinute(timeScheduled)
+                if (parsed != null) {
+                    listOf(String.format(java.util.Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second))
+                } else {
+                    listOf(timeScheduled.trim())
+                }
             }
 
-            val task = ShiftTask(
-                id = taskId ?: java.util.UUID.randomUUID().toString(),
+            val firstTime = times.firstOrNull() ?: "08:00"
+            val primaryTaskId = taskId ?: java.util.UUID.randomUUID().toString()
+            val primaryTask = ShiftTask(
+                id = primaryTaskId,
                 stationId = stationId,
-                timeScheduled = normalizedTime,
+                timeScheduled = firstTime,
                 title = title,
                 instruction = instruction,
                 priority = priority,
@@ -825,15 +833,49 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
                 targetPackageName = targetPackageName,
                 targetAppName = targetAppName
             )
-            repository.insertTask(task)
-            
+
+            // Nếu sửa việc cũ, hủy alarm cũ trước khi lưu và đặt lại
+            if (taskId != null) {
+                cancelShiftTaskAlarm(context, primaryTask)
+            }
+
+            repository.insertTask(primaryTask)
+
             // Đảm bảo chọn vị trí hiện tại để danh sách cập nhật hiển thị ngay lập tức
             selectedStationId.value = stationId
             prefs?.edit()?.putString("selected_station_id", stationId)?.apply()
 
-            // Chỉ lên lịch thông báo nếu ca làm của vị trí này đang được BẮT ĐẦU VÀ công việc KHÔNG bị ẨN
-            if (startedStationIds.value.contains(stationId) && !task.isHidden && !task.isCompleted) {
-                scheduleShiftTaskAlarm(context, task)
+            // Lên lịch chuông báo cho việc chính nếu ca làm của vị trí này đang BẮT ĐẦU và không bị ẩn
+            if (startedStationIds.value.contains(stationId) && !primaryTask.isHidden && !primaryTask.isCompleted) {
+                scheduleShiftTaskAlarm(context, primaryTask)
+            }
+
+            // Nếu người dùng nhập nhiều mốc giờ (ví dụ: 7:30, 9:20, 10:11, 12:18 hoặc 7h30, 9h20, 10h11, 12h18):
+            // Tự động tạo thêm các công việc tương ứng cho từng mốc giờ còn lại với đầy đủ thiết lập và chuông báo độc lập!
+            if (times.size > 1) {
+                times.drop(1).forEach { extraTime ->
+                    val extraTask = ShiftTask(
+                        id = java.util.UUID.randomUUID().toString(),
+                        stationId = stationId,
+                        timeScheduled = extraTime,
+                        title = title,
+                        instruction = instruction,
+                        priority = priority,
+                        requiresConfirmation = requiresConfirmation,
+                        isCompleted = false,
+                        completedAt = null,
+                        hasLoudAlarm = hasLoudAlarm,
+                        isHidden = isHidden,
+                        actionType = actionType,
+                        targetPackageName = targetPackageName,
+                        targetAppName = targetAppName
+                    )
+                    repository.insertTask(extraTask)
+
+                    if (startedStationIds.value.contains(stationId) && !extraTask.isHidden) {
+                        scheduleShiftTaskAlarm(context, extraTask)
+                    }
+                }
             }
         }
     }
@@ -1132,33 +1174,42 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
         startShiftImmediately: Boolean = false
     ) {
         viewModelScope.launch {
+            val isAlreadyStarted = startedStationIds.value.contains(stationId)
             steps.forEach { step ->
-                val parsed = parseHourMinute(step.timeScheduled)
-                val normalizedTime = if (parsed != null) {
-                    String.format(java.util.Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second)
-                } else {
-                    step.timeScheduled.trim()
+                val timeList = parseMultipleTimes(step.timeScheduled)
+                val times = if (timeList.isNotEmpty()) timeList else {
+                    val parsed = parseHourMinute(step.timeScheduled)
+                    if (parsed != null) listOf(String.format(java.util.Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second))
+                    else listOf(step.timeScheduled.trim())
                 }
 
-                val task = ShiftTask(
-                    id = java.util.UUID.randomUUID().toString(),
-                    stationId = stationId,
-                    timeScheduled = normalizedTime,
-                    title = step.title,
-                    instruction = step.instruction,
-                    priority = step.priority,
-                    requiresConfirmation = false,
-                    isCompleted = false,
-                    hasLoudAlarm = step.hasLoudAlarm,
-                    actionType = step.actionType,
-                    targetPackageName = step.targetPackageName,
-                    targetAppName = step.targetAppName
-                )
-                repository.insertTask(task)
+                times.forEach { singleTime ->
+                    val task = ShiftTask(
+                        id = java.util.UUID.randomUUID().toString(),
+                        stationId = stationId,
+                        timeScheduled = singleTime,
+                        title = step.title,
+                        instruction = step.instruction,
+                        priority = step.priority,
+                        requiresConfirmation = false,
+                        isCompleted = false,
+                        hasLoudAlarm = step.hasLoudAlarm,
+                        actionType = step.actionType,
+                        targetPackageName = step.targetPackageName,
+                        targetAppName = step.targetAppName
+                    )
+                    repository.insertTask(task)
+
+                    // Nếu ca làm của vị trí này ĐÃ BẮT ĐẦU hoặc người dùng chọn Bắt đầu ca ngay:
+                    // Lập tức hẹn giờ chuông báo thức cho từng tác vụ mới thêm!
+                    if ((isAlreadyStarted || startShiftImmediately) && !task.isHidden && !task.isCompleted) {
+                        scheduleShiftTaskAlarm(context, task)
+                    }
+                }
             }
             selectStation(stationId, context)
 
-            if (startShiftImmediately) {
+            if (startShiftImmediately && !isAlreadyStarted) {
                 startShiftForStation(stationId, "Lịch trình AI", context)
             }
         }
@@ -1184,33 +1235,40 @@ class NotesViewModel(val repository: NoteRepository, val appContext: Context? = 
             selectedStationId.value = newStationId
             prefs?.edit()?.putString("selected_station_id", newStationId)?.apply()
 
+            val insertedTasks = mutableListOf<ShiftTask>()
             steps.forEach { step ->
-                val parsed = parseHourMinute(step.timeScheduled)
-                val normalizedTime = if (parsed != null) {
-                    String.format(java.util.Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second)
-                } else {
-                    step.timeScheduled.trim()
+                val timeList = parseMultipleTimes(step.timeScheduled)
+                val times = if (timeList.isNotEmpty()) timeList else {
+                    val parsed = parseHourMinute(step.timeScheduled)
+                    if (parsed != null) listOf(String.format(java.util.Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second))
+                    else listOf(step.timeScheduled.trim())
                 }
 
-                val task = ShiftTask(
-                    id = java.util.UUID.randomUUID().toString(),
-                    stationId = newStationId,
-                    timeScheduled = normalizedTime,
-                    title = step.title,
-                    instruction = step.instruction,
-                    priority = step.priority,
-                    requiresConfirmation = false,
-                    isCompleted = false,
-                    hasLoudAlarm = step.hasLoudAlarm,
-                    actionType = step.actionType,
-                    targetPackageName = step.targetPackageName,
-                    targetAppName = step.targetAppName
-                )
-                repository.insertTask(task)
+                times.forEach { singleTime ->
+                    val task = ShiftTask(
+                        id = java.util.UUID.randomUUID().toString(),
+                        stationId = newStationId,
+                        timeScheduled = singleTime,
+                        title = step.title,
+                        instruction = step.instruction,
+                        priority = step.priority,
+                        requiresConfirmation = false,
+                        isCompleted = false,
+                        hasLoudAlarm = step.hasLoudAlarm,
+                        actionType = step.actionType,
+                        targetPackageName = step.targetPackageName,
+                        targetAppName = step.targetAppName
+                    )
+                    repository.insertTask(task)
+                    insertedTasks.add(task)
+                }
             }
 
             if (startShiftImmediately) {
                 startShiftForStation(newStationId, "Lịch trình AI", context)
+                insertedTasks.filter { !it.isHidden && !it.isCompleted }.forEach { task ->
+                    scheduleShiftTaskAlarm(context, task)
+                }
             }
         }
     }

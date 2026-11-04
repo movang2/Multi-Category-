@@ -33,11 +33,23 @@ object ShiftAlarmHelper {
                 set(java.util.Calendar.MILLISECOND, 0)
             }
             val now = System.currentTimeMillis()
-            // Nếu mốc giờ đã qua hoặc đang nằm trong khoảng 10 giây hiện tại, bắt buộc lên lịch cho ngày hôm sau
-            if (forceTomorrow || calendar.timeInMillis <= now + 10_000L) {
+            val diff = calendar.timeInMillis - now
+
+            if (forceTomorrow) {
                 calendar.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                calendar.timeInMillis
+            } else if (diff >= 2_000L) {
+                // Mốc giờ còn trong tương lai hôm nay (cách ít nhất 2 giây)
+                calendar.timeInMillis
+            } else if (diff >= -59_000L) {
+                // Mốc giờ chính là phút hiện tại (ví dụ vừa tạo hoặc vừa bắt đầu ca lúc 19:35 cho việc 19:35)
+                // Kích hoạt chuông/thông báo ngay lập tức sau 1.5 giây để không bị trôi sang ngày hôm sau!
+                now + 1_500L
+            } else {
+                // Mốc giờ đã trôi qua hơn 1 phút trước -> Lên lịch cho ngày mai
+                calendar.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                calendar.timeInMillis
             }
-            calendar.timeInMillis
         }
 
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
@@ -169,15 +181,78 @@ object ShiftAlarmHelper {
         nm?.cancel(task.id.hashCode())
     }
 
-    private fun parseHourMinute(timeStr: String): Pair<Int, Int>? {
-        val parts = timeStr.trim().split(":")
+    fun parseHourMinute(timeStr: String): Pair<Int, Int>? {
+        if (timeStr.isBlank()) return null
+        val clean = timeStr.trim().lowercase(java.util.Locale.getDefault())
+            .replace("h", ":")
+            .replace("H", ":")
+            .replace("g", ":")
+            .replace("giờ", ":")
+            .replace(".", ":")
+            .replace("-", ":")
+        val parts = clean.split(":")
         if (parts.size >= 2) {
             val h = parts[0].trim().toIntOrNull()
-            val m = parts[1].trim().take(2).toIntOrNull()
+            val m = if (parts[1].isBlank()) 0 else parts[1].trim().take(2).toIntOrNull()
             if (h != null && m != null && h in 0..23 && m in 0..59) {
                 return Pair(h, m)
             }
+        } else if (parts.size == 1) {
+            val h = parts[0].trim().toIntOrNull()
+            if (h != null && h in 0..23) {
+                return Pair(h, 0)
+            }
         }
         return null
+    }
+
+    /**
+     * Tách và chuẩn hóa tất cả các mốc thời gian xuất hiện trong chuỗi nhập vào.
+     * Hỗ trợ định dạng dùng dấu ':' (7:30, 22:15) hoặc chữ 'h'/'H'/'g'/'giờ' (7h30, 22h15, 7h).
+     * Hỗ trợ danh sách nhiều mốc giờ phân cách bởi dấu phẩy, chấm phẩy, khoảng trắng.
+     * Ví dụ: "7:30, 9:20, 10:11, 12:18" -> ["07:30", "09:20", "10:11", "12:18"]
+     *         "7h30, 9h20, 10h11, 12h18" -> ["07:30", "09:20", "10:11", "12:18"]
+     */
+    fun parseMultipleTimes(input: String): List<String> {
+        if (input.isBlank()) return emptyList()
+
+        // Biểu thức regex tìm mọi mốc giờ: 7:30, 07:30, 7h30, 7h, 7H30, 7.30, 7g30, 7 giờ 30
+        val timeRegex = Regex("""(?i)\b([0-1]?[0-9]|2[0-3])\s*(?:[:\.]\s*([0-5]?[0-9])|(?:[hHgG]|giờ)\s*([0-5]?[0-9])?)\b""")
+        val results = mutableListOf<String>()
+
+        val matches = timeRegex.findAll(input).toList()
+        if (matches.isNotEmpty()) {
+            for (m in matches) {
+                val h = m.groupValues[1].toIntOrNull() ?: continue
+                val minStr = when {
+                    m.groupValues[2].isNotBlank() -> m.groupValues[2]
+                    m.groupValues[3].isNotBlank() -> m.groupValues[3]
+                    else -> "0"
+                }
+                val min = minStr.toIntOrNull() ?: 0
+                if (h in 0..23 && min in 0..59) {
+                    val formatted = String.format(java.util.Locale.getDefault(), "%02d:%02d", h, min)
+                    if (!results.contains(formatted)) {
+                        results.add(formatted)
+                    }
+                }
+            }
+        }
+
+        // Dự phòng nếu không khớp regex (ví dụ chuỗi đơn giản):
+        if (results.isEmpty()) {
+            val segments = input.split(Regex("[,;|\n\r\\s]+")).map { it.trim() }.filter { it.isNotBlank() }
+            for (seg in segments) {
+                val parsed = parseHourMinute(seg)
+                if (parsed != null) {
+                    val formatted = String.format(java.util.Locale.getDefault(), "%02d:%02d", parsed.first, parsed.second)
+                    if (!results.contains(formatted)) {
+                        results.add(formatted)
+                    }
+                }
+            }
+        }
+
+        return results
     }
 }
